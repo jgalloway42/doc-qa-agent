@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
     openai_chat_model: str = "gpt-4o"
+    ollama_model: str = "llama3.2"
+    ollama_base_url: str = "http://localhost:11434"
 
     # ChromaDB
     chroma_persist_dir: str = "./chroma_db"

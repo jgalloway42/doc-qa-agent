@@ -665,7 +665,29 @@ def build_graph(
 
 - Import `tools_condition` from `langgraph.prebuilt`.
 - The compiled graph is stateless — session memory lives in `runner.py`.
-- Use `ChatAnthropic` or `ChatOpenAI` depending on `settings.llm_provider`.
+- Construct the LLM based on `settings.llm_provider`:
+  ```python
+  if settings.llm_provider == "anthropic":
+      from langchain_anthropic import ChatAnthropic
+      llm = ChatAnthropic(
+          model=settings.anthropic_model,
+          api_key=settings.anthropic_api_key,
+      )
+  elif settings.llm_provider == "openai":
+      from langchain_openai import ChatOpenAI
+      llm = ChatOpenAI(
+          model=settings.openai_chat_model,
+          api_key=settings.openai_api_key,
+      )
+  elif settings.llm_provider == "ollama":
+      from langchain_ollama import ChatOllama
+      llm = ChatOllama(
+          model=settings.ollama_model,
+          base_url=settings.ollama_base_url,
+      )
+  else:
+      raise ValueError(f"Unsupported llm_provider: {settings.llm_provider}")
+  ```
 
 **`validate_tool_results` node — full specification:**
 
@@ -931,6 +953,7 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-anthropic>=0.3.0",
     "langchain-openai>=0.2.0",
+    "langchain-ollama>=0.2.0",
     "langgraph>=0.2.0",
     "mlflow>=2.16.0",
     "pydantic>=2.0.0",
