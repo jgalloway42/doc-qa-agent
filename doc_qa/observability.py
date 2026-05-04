@@ -27,17 +27,17 @@ def log_ingestion_run(
     """Start and end an MLflow run for a single ingestion. Return run_id."""
     from config.settings import settings
 
+    mlflow.set_experiment(settings.mlflow_experiment_name)
     with mlflow.start_run(run_name=f"ingest:{filename}") as run:
-        mlflow.set_experiment(settings.mlflow_experiment_name)
         mlflow.log_param("filename", filename)
         mlflow.log_param("file_hash", file_hash)
+        mlflow.log_param("skipped", str(skipped))
         mlflow.log_param("embedding_provider", embedding_provider)
         mlflow.log_param("chunk_size", chunk_size)
         mlflow.log_param("chunk_overlap", chunk_overlap)
         mlflow.log_metric("chunks_created", chunks_created)
         mlflow.log_metric("embedding_time_s", embedding_time_s)
         mlflow.log_metric("total_time_s", total_time_s)
-        mlflow.log_metric("skipped", 1.0 if skipped else 0.0)
         return run.info.run_id
 
 
