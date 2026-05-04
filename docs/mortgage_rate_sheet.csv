@@ -1,0 +1,19 @@
+product,loan_type,term_months,rate_pct,apr_pct,points,min_credit_score,max_ltv_pct,max_dti_pct,requires_pmi_above_80_ltv,effective_date,notes
+30-Year Fixed,Conventional Conforming,360,7.125,7.284,0.5,620,97,43,Yes,2025-01-15,Standard conforming; PMI required above 80% LTV
+20-Year Fixed,Conventional Conforming,240,6.875,7.012,0.5,620,95,43,Yes,2025-01-15,Lower rate than 30yr; higher payment
+15-Year Fixed,Conventional Conforming,180,6.500,6.689,0.5,620,97,43,Yes,2025-01-15,Significant interest savings vs 30yr
+10-Year Fixed,Conventional Conforming,120,6.375,6.521,0.5,640,90,43,Yes,2025-01-15,Shortest term; highest payment
+5/1 ARM,Conventional Conforming,360,6.250,7.105,0.375,620,95,43,Yes,2025-01-15,Fixed 5 years then adjusts annually; caps 2/2/5
+7/1 ARM,Conventional Conforming,360,6.500,7.198,0.375,620,95,43,Yes,2025-01-15,Fixed 7 years then adjusts annually; caps 2/2/5
+10/1 ARM,Conventional Conforming,360,6.750,7.312,0.375,640,90,43,Yes,2025-01-15,Fixed 10 years then adjusts annually; caps 2/2/5
+30-Year Fixed Jumbo,Conventional Jumbo,360,7.500,7.624,0.625,700,80,43,No,2025-01-15,Loan amount $766,551 to $2,000,000; 20% down required
+15-Year Fixed Jumbo,Conventional Jumbo,180,7.125,7.298,0.625,700,80,43,No,2025-01-15,Loan amount $766,551 to $2,000,000; 20% down required
+7/1 ARM Jumbo,Conventional Jumbo,360,7.000,7.489,0.500,720,75,43,No,2025-01-15,Fixed 7 years; caps 2/2/5; loan up to $2M
+30-Year Fixed FHA,FHA,360,6.875,7.981,0.000,580,96.5,57,No,2025-01-15,MIP required for life of loan (1.75% UFMIP + 0.55% annual)
+15-Year Fixed FHA,FHA,180,6.375,7.412,0.000,580,96.5,57,No,2025-01-15,MIP required; UFMIP 1.75%; annual 0.50%
+30-Year Fixed VA,VA,360,6.750,6.928,0.000,580,100,41,No,2025-01-15,No PMI; VA Funding Fee applies; eligible veterans/active duty
+15-Year Fixed VA,VA,180,6.375,6.589,0.000,580,100,41,No,2025-01-15,No PMI; VA Funding Fee applies
+30-Year Fixed USDA,USDA,360,6.875,7.102,0.000,640,100,41,No,2025-01-15,Rural areas only; 1.0% upfront guarantee fee; 0.35% annual fee
+30-Year Fixed FHA (High Balance),FHA,360,7.000,8.112,0.000,580,96.5,57,No,2025-01-15,High-cost area loan limits; MIP applies
+30-Year Fixed (Rate Buydown 2-1),Conventional Conforming,360,5.125,7.284,2.000,640,95,43,Yes,2025-01-15,2-1 temporary buydown; seller-paid option; note rate 7.125%
+Interest-Only 10/1 ARM Jumbo,Conventional Jumbo,360,7.250,7.812,0.750,740,70,38,No,2025-01-15,Interest only for first 120 months; fully amortizing thereafter; loan up to $3M

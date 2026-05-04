@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# doc-qa-agent project
+chroma_db/
+mlruns/
+test_mlruns/
+test_chroma_db/
+.ingested_hashes.json
+htmlcov/

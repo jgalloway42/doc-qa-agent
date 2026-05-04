@@ -21,6 +21,7 @@ refuses to answer from general knowledge.
 - [Configuration](#configuration)
 - [Running with Docker](#running-with-docker)
 - [Development](#development)
+- [Document Corpus](#document-corpus)
 - [Sample Q&A](#sample-qa)
 - [Observability](#observability)
 - [Known Limitations](#known-limitations)
@@ -414,6 +415,62 @@ doc-qa-agent/
 ├── docker-compose.yml
 └── pyproject.toml
 ```
+
+---
+
+## Document Corpus
+
+The `docs/` directory contains eight banking documents across six file types. They are
+designed to require cross-document retrieval — most interesting questions cannot be
+answered from a single document. All fictional documents use **Meridian Bank of
+Springfield, N.A.** as the issuing institution. No real PII is present in any document.
+
+### Documents
+
+#### Downloaded from public government sources
+
+| Filename | Type | Source | Document class |
+|---|---|---|---|
+| `fannie_mae_1003_loan_application.pdf` | PDF | Fannie Mae / FHFA | Uniform Residential Loan Application (Form 1003) — filled sample showing borrower info, employment, assets, liabilities, and loan details across 8 pages |
+| `cfpb_closing_disclosure.pdf` | PDF | CFPB (consumerfinance.gov) | Closing Disclosure (TRID) — 5-page completed form showing final loan terms, projected payments, itemized closing costs, and cash to close |
+| `cfpb_loan_estimate.pdf` | PDF | CFPB (consumerfinance.gov) | Loan Estimate (TRID) — 3-page completed form showing estimated rate, payment, and closing costs; pairs with the Closing Disclosure for comparison questions |
+
+To download these files:
+```bash
+# Fannie Mae Form 1003 (filled sample)
+curl -L "https://singlefamily.fanniemae.com/media/7991/display" -o docs/fannie_mae_1003_loan_application.pdf
+
+# CFPB Closing Disclosure (filled sample)
+curl -L "https://files.consumerfinance.gov/f/201311_cfpb_kbyo_closing-disclosure.pdf" -o docs/cfpb_closing_disclosure.pdf
+
+# CFPB Loan Estimate (filled sample)
+curl -L "https://files.consumerfinance.gov/f/201311_cfpb_kbyo_loan-estimate.pdf" -o docs/cfpb_loan_estimate.pdf
+```
+
+#### Created for this project (fictional, no real PII)
+
+| Filename | Type | Contents |
+|---|---|---|
+| `underwriting_guidelines.docx` | DOCX | 9-section internal bank policy covering borrower eligibility, credit score minimums by product (see table below), DTI limits, LTV maximums, PMI rules, reserve requirements, the exception approval hierarchy, and appraisal requirements |
+| `mortgage_products_faq.md` | Markdown | 30 Q&A pairs across 7 topic areas: mortgage types, loan types (conforming/jumbo/FHA/VA/USDA), qualification criteria, PMI, escrow, closing costs, and refinancing |
+| `mortgage_rate_sheet.csv` | CSV | 18 rows of current product rates with columns: `product`, `loan_type`, `term_months`, `rate_pct`, `apr_pct`, `points`, `min_credit_score`, `max_ltv_pct`, `max_dti_pct`, `requires_pmi_above_80_ltv`, `effective_date`, `notes` |
+| `tila_disclosure_statement.txt` | TXT | Complete Truth in Lending Act disclosure for a fictional $285,000 30-year fixed mortgage — APR, finance charge, amount financed, total of payments, payment schedule, late charge terms, prepayment clause, and assumption clause |
+| `loan_products_catalog.json` | JSON | Array of 10 loan product objects with full qualification data per product: credit score minimums, max LTV/DTI, PMI rules, MIP/funding fee details, eligible property types, eligible occupancy types, and reserve requirements |
+
+### Cross-document query map
+
+The corpus is deliberately structured so that the most useful questions require
+retrieving from multiple documents. The table below shows which documents each
+query type touches — this is what makes the demo compelling.
+
+| Question type | Documents required | Tools called |
+|---|---|---|
+| "Would a borrower with a 660 credit score and 85% LTV qualify for a conventional loan, and what rate would they get?" | `underwriting_guidelines.docx` + `mortgage_rate_sheet.csv` | `search_documents` (×2) |
+| "How did the closing costs change between the loan estimate and the closing disclosure?" | `cfpb_loan_estimate.pdf` + `cfpb_closing_disclosure.pdf` | `search_documents` (×2) |
+| "What is the monthly payment on the loan in the closing disclosure, and how much total interest will be paid?" | `cfpb_closing_disclosure.pdf` | `search_documents` + `calculate` |
+| "What type of document is the Form 1003 and what sections does it contain?" | `fannie_mae_1003_loan_application.pdf` | `classify_document` + `summarize_document` |
+| "Does an FHA loan require PMI, and what are the DTI limits if I have strong compensating factors?" | `loan_products_catalog.json` + `underwriting_guidelines.docx` + `mortgage_products_faq.md` | `search_documents` (×3) |
+| "What is the APR on the TILA disclosure, and what would the monthly payment be on a $300,000 loan at the same rate?" | `tila_disclosure_statement.txt` | `search_documents` + `calculate` |
 
 ---
 
