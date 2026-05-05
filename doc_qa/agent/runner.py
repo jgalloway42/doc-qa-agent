@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass, field
 
 import mlflow
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from doc_qa.agent.graph import build_graph, make_llm
 from doc_qa.embeddings import EmbeddingProvider
@@ -88,12 +88,16 @@ class AgentRunner:
         if not isinstance(response_text, str):
             response_text = str(response_text)
 
-        # Collect tool call names from all AIMessages in the result
+        # Collect tool call names and results from the result state
         tool_call_names: list[str] = []
+        tool_results: list[str] = []
         for msg in result_state["messages"]:
             if isinstance(msg, AIMessage) and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_call_names.append(tc["name"])
+            elif isinstance(msg, ToolMessage):
+                content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                tool_results.append(content)
 
         # Grounding check
         grounded = self._check_grounded(response_text)
@@ -124,6 +128,7 @@ class AgentRunner:
                 user_message=user_message[:500],
                 response_preview=final_response[:500],
                 tool_calls=tool_call_names,
+                tool_results=tool_results,
                 latency_s=latency_s,
                 grounded=log_grounded,
             )

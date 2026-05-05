@@ -82,6 +82,39 @@ def test_run_turn_logs_mlflow(chroma_store, fake_embedder, mock_llm, mocker):
     assert parent_run is not None
 
 
+def test_run_turn_logs_tool_results(chroma_store, fake_embedder, mock_llm, mocker):
+    from langchain_core.messages import ToolMessage
+
+    runner, mock_graph = _make_runner(chroma_store, fake_embedder, mock_llm, mocker)
+    session = runner.new_session()
+
+    mock_graph.invoke.return_value = {
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "search_documents", "id": "c1", "args": {"query": "rate"}}],
+            ),
+            ToolMessage(
+                content="Rate is 6.75% per mortgage_faq.md page 3.",
+                name="search_documents",
+                tool_call_id="c1",
+            ),
+            AIMessage(content="The rate is 6.75% per mortgage_faq.md."),
+        ],
+        "retry_count": 0,
+        "last_tool_name": "search_documents",
+        "last_tool_empty": False,
+    }
+
+    mock_log = mocker.patch("doc_qa.observability.log_agent_turn")
+    runner.run_turn(session, "What is the rate?")
+
+    kwargs = mock_log.call_args.kwargs
+    assert kwargs["tool_calls"] == ["search_documents"]
+    assert len(kwargs["tool_results"]) == 1
+    assert "6.75%" in kwargs["tool_results"][0]
+
+
 # ---------------------------------------------------------------------------
 # _check_grounded
 # ---------------------------------------------------------------------------

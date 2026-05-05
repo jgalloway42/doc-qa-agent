@@ -595,6 +595,7 @@ with `step=turn_index`:
 | `retrieval_score_max` | Metric (per step) | Best matching chunk score |
 | `retrieval_score_min` | Metric (per step) | Weakest matching chunk score |
 | `tool_calls` | Param (per step) | e.g., `search_documents,calculate` |
+| `tool_result_N` | Param (per step) | Content returned by the Nth tool call, truncated to 500 chars. Useful for diagnosing retrieval quality without opening a Streamlit session. |
 | `user_message` | Param (per step) | Truncated to 500 chars |
 
 The `grounded` metric is queryable as a time-series across sessions — use it

@@ -47,6 +47,7 @@ def log_agent_turn(
     user_message: str,
     response_preview: str,
     tool_calls: list[str],
+    tool_results: list[str],
     latency_s: float,
     grounded: bool,
 ) -> None:
@@ -57,6 +58,8 @@ def log_agent_turn(
         mlflow.log_param(f"turn_{turn_index}_user_message", user_message[:500])
         mlflow.log_param(f"turn_{turn_index}_response_preview", response_preview[:500])
         mlflow.log_param(f"turn_{turn_index}_tool_calls", ",".join(tool_calls))
+        for i, result in enumerate(tool_results):
+            mlflow.log_param(f"turn_{turn_index}_tool_result_{i}", result[:500])
 
 
 def log_retrieval_quality(
