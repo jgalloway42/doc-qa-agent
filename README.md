@@ -7,7 +7,7 @@ refuses to answer from general knowledge.
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![CI](https://github.com/jgalloway42/doc-qa-agent/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/jgalloway42/doc-qa-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jgalloway42/doc-qa-agent/actions/workflows/ci.yml)
 ![Coverage](https://codecov.io/gh/jgalloway42/doc-qa-agent/branch/main/graph/badge.svg)
 
 ---
