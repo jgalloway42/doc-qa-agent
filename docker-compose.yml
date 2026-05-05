@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./mlruns:/app/mlruns
+      - ./.ingested_hashes.json:/app/.ingested_hashes.json
+    env_file:
+      - .env
+
+  mlflow:
+    image: python:3.11-slim
+    command: >
+      sh -c "pip install mlflow -q &&
+             mlflow ui --backend-store-uri /mlruns --host 0.0.0.0 --port 5000"
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlruns
