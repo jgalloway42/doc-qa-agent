@@ -43,7 +43,3 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Run tests with coverage
         run: pytest --cov=doc_qa --cov-report=xml --cov-fail-under=80
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.xml
