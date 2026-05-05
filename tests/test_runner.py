@@ -1,8 +1,7 @@
 import mlflow
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from doc_qa.agent.runner import AgentRunner, AgentSession, UNGROUNDED_PREFIX
+from doc_qa.agent.runner import AgentRunner, AgentSession
 
 
 def _make_runner(chroma_store, fake_embedder, mock_llm, mocker):
@@ -92,6 +91,7 @@ def test_check_grounded_true_when_filename_present(chroma_store, fake_embedder, 
     runner, _ = _make_runner(chroma_store, fake_embedder, mock_llm, mocker)
     # Seed the store with a document so list_documents returns something
     from doc_qa.store.base import Chunk
+
     chunks = [Chunk("f::0000", "text", "loan_application.pdf", 1, 0)]
     embeddings = fake_embedder.embed_documents(["text"])
     chroma_store.add_chunks(chunks, embeddings)
@@ -102,6 +102,7 @@ def test_check_grounded_true_when_filename_present(chroma_store, fake_embedder, 
 def test_check_grounded_false_when_no_filename(chroma_store, fake_embedder, mock_llm, mocker):
     runner, _ = _make_runner(chroma_store, fake_embedder, mock_llm, mocker)
     from doc_qa.store.base import Chunk
+
     chunks = [Chunk("f::0000", "text", "loan_application.pdf", 1, 0)]
     embeddings = fake_embedder.embed_documents(["text"])
     chroma_store.add_chunks(chunks, embeddings)
@@ -147,14 +148,13 @@ def test_run_turn_formats_grounding_failure_on_ungrounded_prefix(
     assert "I could not find" in result
 
 
-def test_run_turn_grounded_response_returned_as_is(
-    chroma_store, fake_embedder, mock_llm, mocker
-):
+def test_run_turn_grounded_response_returned_as_is(chroma_store, fake_embedder, mock_llm, mocker):
     runner, mock_graph = _make_runner(chroma_store, fake_embedder, mock_llm, mocker)
     session = runner.new_session()
 
     # Seed store so the filename is recognized
     from doc_qa.store.base import Chunk
+
     chunks = [Chunk("f::0000", "text", "mortgage_faq.md", 1, 0)]
     embeddings = fake_embedder.embed_documents(["text"])
     chroma_store.add_chunks(chunks, embeddings)

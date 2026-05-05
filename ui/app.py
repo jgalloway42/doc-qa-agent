@@ -18,6 +18,7 @@ st.set_page_config(page_title="Doc QA Agent", page_icon="📄", layout="wide")
 # Session state initialisation (runs once per browser session)
 # ---------------------------------------------------------------------------
 
+
 def _init_session() -> None:
     if "runner" not in st.session_state:
         store = ChromaVectorStore(

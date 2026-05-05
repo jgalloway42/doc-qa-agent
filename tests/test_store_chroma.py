@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from doc_qa.store.base import Chunk
 from doc_qa.store.chroma import ChromaVectorStore

@@ -19,7 +19,9 @@ def _make_txt(tmp_path, name="sample.txt", content=None):
 
 def test_ingest_file_returns_correct_chunk_count(tmp_path, chroma_store, fake_embedder):
     path = _make_txt(tmp_path)
-    result = ingest_file(path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json")
+    result = ingest_file(
+        path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json"
+    )
 
     assert isinstance(result, IngestionResult)
     assert result.filename == path.name
@@ -54,7 +56,9 @@ def test_ingest_file_force_flag_overrides_dedup(tmp_path, chroma_store, fake_emb
 
 def test_ingest_file_empty_file_creates_zero_chunks(tmp_path, chroma_store, fake_embedder):
     path = _make_txt(tmp_path, content="")
-    result = ingest_file(path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json")
+    result = ingest_file(
+        path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json"
+    )
 
     assert result.chunks_created == 0
     assert not result.skipped
@@ -78,7 +82,9 @@ def test_ingest_file_raises_for_missing_file(tmp_path, chroma_store, fake_embedd
 
 def test_ingest_file_logs_mlflow_run(tmp_path, chroma_store, fake_embedder):
     path = _make_txt(tmp_path)
-    result = ingest_file(path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json")
+    result = ingest_file(
+        path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json"
+    )
 
     assert result.mlflow_run_id
     run = mlflow.get_run(result.mlflow_run_id)
@@ -119,5 +125,7 @@ def test_ingest_directory_processes_all_supported_files(tmp_path, chroma_store, 
 
 
 def test_ingest_directory_empty_dir(tmp_path, chroma_store, fake_embedder):
-    results = ingest_directory(tmp_path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json")
+    results = ingest_directory(
+        tmp_path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json"
+    )
     assert results == []

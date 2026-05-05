@@ -13,19 +13,25 @@ class TestChunkCount:
         # windows start at: 0, 180, 360, 540, 720, 900 → 6 windows
         # last window = full_text[900:1100] = 100 chars (≥ min_chunk_chars=100)
         text = "A" * 1000
-        chunks = chunk_pages(_pages(text), "doc.txt", chunk_size=200, chunk_overlap=20, min_chunk_chars=100)
+        chunks = chunk_pages(
+            _pages(text), "doc.txt", chunk_size=200, chunk_overlap=20, min_chunk_chars=100
+        )
         assert len(chunks) == 6
 
     def test_empty_pages_returns_empty(self):
         assert chunk_pages([], "doc.txt") == []
 
     def test_single_short_page_below_min_returns_empty(self):
-        chunks = chunk_pages(_pages("Hi"), "doc.txt", chunk_size=512, chunk_overlap=64, min_chunk_chars=100)
+        chunks = chunk_pages(
+            _pages("Hi"), "doc.txt", chunk_size=512, chunk_overlap=64, min_chunk_chars=100
+        )
         assert chunks == []
 
     def test_single_page_at_min_length_included(self):
         text = "X" * 100
-        chunks = chunk_pages(_pages(text), "doc.txt", chunk_size=512, chunk_overlap=64, min_chunk_chars=100)
+        chunks = chunk_pages(
+            _pages(text), "doc.txt", chunk_size=512, chunk_overlap=64, min_chunk_chars=100
+        )
         assert len(chunks) == 1
 
 
@@ -38,14 +44,22 @@ class TestChunkIds:
 
     def test_chunk_id_format(self):
         text = "A" * 600
-        chunks = chunk_pages(_pages(text), "path/to/my_doc.pdf", chunk_size=300, chunk_overlap=30, min_chunk_chars=10)
+        chunks = chunk_pages(
+            _pages(text), "path/to/my_doc.pdf", chunk_size=300, chunk_overlap=30, min_chunk_chars=10
+        )
         pattern = re.compile(r"^my_doc\.pdf::\d{4}$")
         for chunk in chunks:
             assert pattern.match(chunk.chunk_id), f"Bad chunk_id: {chunk.chunk_id}"
 
     def test_chunk_id_uses_basename_not_full_path(self):
         text = "A" * 300
-        chunks = chunk_pages(_pages(text), "some/nested/dir/report.pdf", chunk_size=300, chunk_overlap=10, min_chunk_chars=10)
+        chunks = chunk_pages(
+            _pages(text),
+            "some/nested/dir/report.pdf",
+            chunk_size=300,
+            chunk_overlap=10,
+            min_chunk_chars=10,
+        )
         assert all(c.chunk_id.startswith("report.pdf::") for c in chunks)
 
     def test_chunk_index_is_sequential(self):
@@ -58,7 +72,9 @@ class TestChunkOverlap:
     def test_chunk_overlap_content(self):
         # Chunks should share the overlapping region
         text = "A" * 500
-        chunks = chunk_pages(_pages(text), "doc.txt", chunk_size=100, chunk_overlap=20, min_chunk_chars=10)
+        chunks = chunk_pages(
+            _pages(text), "doc.txt", chunk_size=100, chunk_overlap=20, min_chunk_chars=10
+        )
         assert len(chunks) >= 2
         # chunk[0] ends at text[100], chunk[1] starts at text[80]
         # so chunk[0][-20:] == chunk[1][:20]
@@ -71,14 +87,18 @@ class TestShortChunkDropping:
         # chunk_size=100, overlap=0, text=105 chars
         # windows: [0:100] (100 chars), [100:200] (5 chars — dropped)
         text = "A" * 105
-        chunks = chunk_pages(_pages(text), "doc.txt", chunk_size=100, chunk_overlap=0, min_chunk_chars=100)
+        chunks = chunk_pages(
+            _pages(text), "doc.txt", chunk_size=100, chunk_overlap=0, min_chunk_chars=100
+        )
         assert len(chunks) == 1
         assert len(chunks[0].text) == 100
 
     def test_min_chunk_chars_boundary(self):
         # Exactly min_chunk_chars should be included
         text = "A" * 50
-        chunks = chunk_pages(_pages(text), "doc.txt", chunk_size=512, chunk_overlap=64, min_chunk_chars=50)
+        chunks = chunk_pages(
+            _pages(text), "doc.txt", chunk_size=512, chunk_overlap=64, min_chunk_chars=50
+        )
         assert len(chunks) == 1
 
 
@@ -115,5 +135,11 @@ class TestPageAssignment:
 
     def test_filename_stored_as_basename(self):
         text = "A" * 300
-        chunks = chunk_pages(_pages(text), "nested/path/report.pdf", chunk_size=300, chunk_overlap=0, min_chunk_chars=10)
+        chunks = chunk_pages(
+            _pages(text),
+            "nested/path/report.pdf",
+            chunk_size=300,
+            chunk_overlap=0,
+            min_chunk_chars=10,
+        )
         assert all(c.filename == "report.pdf" for c in chunks)

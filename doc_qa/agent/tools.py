@@ -133,6 +133,7 @@ def make_classify_document(store: VectorStore, llm):
 # Tool 5: calculate
 # ---------------------------------------------------------------------------
 
+
 def _pmt(rate: float, nper: int, pv: float) -> float:
     """Standard annuity payment formula."""
     if rate == 0:
@@ -172,6 +173,7 @@ def calculate(expression: str) -> str:
     # Safe arithmetic via simpleeval
     try:
         from simpleeval import EvalWithCompoundTypes, InvalidExpression
+
         evaluator = EvalWithCompoundTypes(
             functions={"sqrt": math.sqrt, "abs": abs, "round": round, "pow": pow},
         )

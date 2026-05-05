@@ -1,6 +1,5 @@
 from unittest.mock import MagicMock
 
-import pytest
 from langchain_core.messages import AIMessage
 
 from doc_qa.agent.tools import (
@@ -10,7 +9,7 @@ from doc_qa.agent.tools import (
     make_search_documents,
     make_summarize_document,
 )
-from doc_qa.store.base import Chunk, SearchResult
+from doc_qa.store.base import Chunk
 
 
 def _chunk(filename="doc.pdf", text="Sample text.", index=0, page=1):
@@ -112,7 +111,9 @@ def test_classify_document_returns_known_type(chroma_store, fake_embedder):
     chroma_store.add_chunks(chunks, embeddings)
 
     mock_llm = MagicMock()
-    mock_llm.invoke.return_value = AIMessage(content="Promissory Note: The text contains a promise to pay.")
+    mock_llm.invoke.return_value = AIMessage(
+        content="Promissory Note: The text contains a promise to pay."
+    )
 
     classify_fn = make_classify_document(chroma_store, mock_llm)
     result = classify_fn.invoke({"filename": "note.pdf"})

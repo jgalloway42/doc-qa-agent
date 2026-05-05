@@ -80,7 +80,8 @@ class ChromaVectorStore(VectorStore):
     def list_documents(self) -> list[str]:
         result = self._collection.get(include=["metadatas"])
         filenames: set[str] = {
-            str(m["filename"]) for m in result["metadatas"]  # type: ignore[union-attr]
+            str(m["filename"])
+            for m in result["metadatas"]  # type: ignore[union-attr]
         }
         return sorted(filenames)
 

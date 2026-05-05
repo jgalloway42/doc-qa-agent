@@ -131,6 +131,8 @@ def ingest_directory(
     results = []
     for path in sorted(dir_path.iterdir()):
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            result = ingest_file(path, store, embedder, force=force, hash_store_path=hash_store_path)
+            result = ingest_file(
+                path, store, embedder, force=force, hash_store_path=hash_store_path
+            )
             results.append(result)
     return results

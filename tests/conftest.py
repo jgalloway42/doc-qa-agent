@@ -1,15 +1,15 @@
+import mlflow
 import numpy as np
 import pytest
 
-import mlflow
+from doc_qa.embeddings import EmbeddingProvider
 from doc_qa.store.base import Chunk
 from doc_qa.store.chroma import ChromaVectorStore
-from doc_qa.embeddings import EmbeddingProvider
-
 
 # ---------------------------------------------------------------------------
 # MLflow — redirect to a temp dir so tests never pollute ./mlruns
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _mlflow_tmp(tmp_path):
@@ -22,6 +22,7 @@ def _mlflow_tmp(tmp_path):
 # ---------------------------------------------------------------------------
 # Fake embedding provider — fixed-length random vectors (dim=384)
 # ---------------------------------------------------------------------------
+
 
 class FakeEmbeddingProvider(EmbeddingProvider):
     DIM = 384
@@ -50,10 +51,13 @@ def fake_embedder() -> FakeEmbeddingProvider:
 # ChromaDB store backed by an in-memory EphemeralClient
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def chroma_store() -> ChromaVectorStore:
     import uuid
+
     import chromadb
+
     client = chromadb.EphemeralClient()
     # Unique collection name per test so EphemeralClient singletons don't bleed state
     collection_name = f"test_{uuid.uuid4().hex}"
@@ -63,6 +67,7 @@ def chroma_store() -> ChromaVectorStore:
 # ---------------------------------------------------------------------------
 # Sample chunks
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_chunk() -> Chunk:
@@ -120,9 +125,11 @@ def sample_chunks() -> list[Chunk]:
 # Mock LLM
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_llm(mocker):
     from langchain_core.messages import AIMessage
+
     llm = mocker.MagicMock()
     llm.invoke.return_value = AIMessage(content="test response")
     llm.bind_tools.return_value = llm
@@ -132,6 +139,7 @@ def mock_llm(mocker):
 # ---------------------------------------------------------------------------
 # Temp docs directory with sample files
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_docs_dir(tmp_path):
@@ -144,8 +152,10 @@ def tmp_docs_dir(tmp_path):
     # Minimal valid PDF (no OCR needed — just text-based)
     pdf_file = tmp_path / "test.pdf"
     try:
-        from reportlab.pdfgen import canvas as rl_canvas
         import io
+
+        from reportlab.pdfgen import canvas as rl_canvas
+
         buf = io.BytesIO()
         c = rl_canvas.Canvas(buf)
         c.drawString(72, 720, "Test PDF content for unit tests.")

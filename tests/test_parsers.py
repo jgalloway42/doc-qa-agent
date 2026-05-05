@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from doc_qa.ingestion.parsers import (
-    SUPPORTED_EXTENSIONS,
     parse_csv,
     parse_file,
     parse_json,
@@ -210,8 +209,9 @@ def test_parse_file_dispatches_txt(tmp_path):
 
 def test_parse_pdf_pypdf_path(tmp_path):
     """Digital PDF with sufficient text must NOT trigger OCR."""
-    from reportlab.pdfgen import canvas as rl_canvas
     import io
+
+    from reportlab.pdfgen import canvas as rl_canvas
 
     # Build a 2-page PDF with 200+ chars per page
     page_text_1 = "A" * 210
@@ -225,10 +225,13 @@ def test_parse_pdf_pypdf_path(tmp_path):
     pdf_path = tmp_path / "digital.pdf"
     pdf_path.write_bytes(buf.getvalue())
 
-    with patch("doc_qa.ingestion.parsers.pytesseract", create=True) as mock_tess:
-        with patch("doc_qa.ingestion.parsers.convert_from_path", create=True) as mock_conv:
-            from doc_qa.ingestion.parsers import parse_pdf
-            result = parse_pdf(pdf_path)
+    with (
+        patch("doc_qa.ingestion.parsers.pytesseract", create=True) as mock_tess,
+        patch("doc_qa.ingestion.parsers.convert_from_path", create=True) as mock_conv,
+    ):
+        from doc_qa.ingestion.parsers import parse_pdf
+
+        result = parse_pdf(pdf_path)
 
     assert len(result) == 2
     mock_conv.assert_not_called()
@@ -247,6 +250,7 @@ def test_parse_pdf_ocr_fallback_triggered():
         pytest.skip("OCR fixture not found — run tests/fixtures/create_scanned_fixture.py")
 
     import pytesseract
+
     from doc_qa.ingestion.parsers import parse_pdf
 
     try:
@@ -254,8 +258,10 @@ def test_parse_pdf_ocr_fallback_triggered():
     except pytesseract.TesseractNotFoundError:
         pytest.skip("Tesseract not installed on this system")
 
-    with patch("doc_qa.ingestion.parsers.convert_from_path") as mock_conv, \
-         patch("doc_qa.ingestion.parsers.pytesseract") as mock_tess:
+    with (
+        patch("doc_qa.ingestion.parsers.convert_from_path") as mock_conv,
+        patch("doc_qa.ingestion.parsers.pytesseract") as mock_tess,
+    ):
         mock_conv.return_value = [MagicMock(), MagicMock()]  # 2 fake PIL images
         mock_tess.image_to_string.return_value = "Extracted OCR text from scanned page."
         mock_tess.TesseractNotFoundError = pytesseract.TesseractNotFoundError
@@ -269,9 +275,10 @@ def test_parse_pdf_ocr_fallback_triggered():
 
 def test_parse_pdf_tesseract_missing_degrades_gracefully(tmp_path):
     """If Tesseract is missing, parse_pdf must return pypdf results without raising."""
-    from reportlab.pdfgen import canvas as rl_canvas
     import io
+
     import pytesseract
+    from reportlab.pdfgen import canvas as rl_canvas
 
     # Sparse PDF — only 10 chars per page, below the OCR threshold
     buf = io.BytesIO()
@@ -282,8 +289,10 @@ def test_parse_pdf_tesseract_missing_degrades_gracefully(tmp_path):
     pdf_path = tmp_path / "sparse.pdf"
     pdf_path.write_bytes(buf.getvalue())
 
-    with patch("doc_qa.ingestion.parsers.convert_from_path") as mock_conv, \
-         patch("doc_qa.ingestion.parsers.pytesseract") as mock_tess:
+    with (
+        patch("doc_qa.ingestion.parsers.convert_from_path") as mock_conv,
+        patch("doc_qa.ingestion.parsers.pytesseract") as mock_tess,
+    ):
         mock_conv.return_value = [MagicMock()]
         mock_tess.TesseractNotFoundError = pytesseract.TesseractNotFoundError
         mock_tess.image_to_string.side_effect = pytesseract.TesseractNotFoundError

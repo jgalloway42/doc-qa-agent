@@ -1,8 +1,6 @@
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from doc_qa.agent.graph import AgentState, build_graph, validate_tool_results
-
 
 # ---------------------------------------------------------------------------
 # build_graph

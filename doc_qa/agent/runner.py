@@ -101,12 +101,10 @@ class AgentRunner:
             final_response = self._format_grounding_failure()
             log_grounded = False
         elif response_text.startswith(UNGROUNDED_PREFIX):
-            stripped = response_text[len(UNGROUNDED_PREFIX):].strip()
+            stripped = response_text[len(UNGROUNDED_PREFIX) :].strip()
             doc_list = "\n".join(f"• {fn}" for fn in self._store.list_documents())
             final_response = (
-                f"⚠️ {stripped}\n\nDocuments available:\n{doc_list}"
-                if doc_list
-                else f"⚠️ {stripped}"
+                f"⚠️ {stripped}\n\nDocuments available:\n{doc_list}" if doc_list else f"⚠️ {stripped}"
             )
             log_grounded = False
         else:
