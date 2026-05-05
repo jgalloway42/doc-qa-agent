@@ -630,6 +630,15 @@ any production deployment.
 concurrent writes from multiple processes. Multi-worker deployments require
 ChromaDB's HTTP server mode or a Snowflake Cortex / pgvector migration.
 
+**No separate backend process.** The agent runner, vector store, and embedding
+model all run in-process with the Streamlit UI. This is intentional for a
+single-user local tool, but means concurrent users will block each other —
+Streamlit processes one interaction at a time. For multi-user or API access,
+the right path is to extract `AgentRunner` into a FastAPI service and have
+Streamlit (or any frontend) call it over HTTP. The `AgentRunner` and
+`VectorStore` classes are already structured for this split with no logic changes
+required.
+
 ---
 
 ## Production Migration
