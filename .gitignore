@@ -220,7 +220,10 @@ __marimo__/
 # doc-qa-agent project
 chroma_db/
 mlruns/
+mlruns.db
 test_mlruns/
+test_mlruns.db
+mlflow_data/
 test_chroma_db/
 .ingested_hashes.json
 htmlcov/

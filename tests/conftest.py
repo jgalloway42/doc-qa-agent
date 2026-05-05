@@ -13,10 +13,10 @@ from doc_qa.store.chroma import ChromaVectorStore
 
 @pytest.fixture(autouse=True)
 def _mlflow_tmp(tmp_path):
-    uri = str(tmp_path / "mlruns")
+    uri = f"sqlite:///{tmp_path}/test_mlruns.db"
     mlflow.set_tracking_uri(uri)
     yield
-    mlflow.set_tracking_uri("./mlruns")
+    mlflow.set_tracking_uri("sqlite:///mlruns.db")
 
 
 # ---------------------------------------------------------------------------

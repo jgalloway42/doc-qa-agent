@@ -1,22 +1,36 @@
 version: "3.9"
 services:
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./mlflow_data:/app/mlflow_data
+      - ./.ingested_hashes.json:/app/.ingested_hashes.json
+    env_file:
+      - .env
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlruns.db
+
   app:
     build: .
     ports:
       - "8501:8501"
-    volumes:
-      - ./chroma_db:/app/chroma_db
-      - ./mlruns:/app/mlruns
-      - ./.ingested_hashes.json:/app/.ingested_hashes.json
     env_file:
       - .env
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      - api
 
   mlflow:
     image: python:3.11-slim
     command: >
       sh -c "pip install mlflow -q &&
-             mlflow ui --backend-store-uri /mlruns --host 0.0.0.0 --port 5000"
+             mlflow ui --backend-store-uri sqlite:////mlflow_data/mlruns.db --host 0.0.0.0 --port 5000"
     ports:
       - "5000:5000"
     volumes:
-      - ./mlruns:/mlruns
+      - ./mlflow_data:/mlflow_data

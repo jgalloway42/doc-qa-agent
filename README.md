@@ -17,6 +17,7 @@ refuses to answer from general knowledge.
 - [Architecture](#architecture)
 - [Agent Capabilities](#agent-capabilities)
 - [Quick Start](#quick-start)
+- [API Reference](#api-reference)
 - [Configuration](#configuration)
 - [Running with Docker](#running-with-docker)
 - [Development](#development)
@@ -44,8 +45,12 @@ numbers. When it cannot find an answer, it says so and lists what it does have.
 - **Modular by design** — every major component sits behind an abstract interface.
   The vector store, embedding provider, and LLM are all swappable via environment
   variables or a one-class implementation.
+- **Proper separation of concerns** — a FastAPI backend owns all agent and
+  retrieval logic; the Streamlit frontend is a thin HTTP client. Swap the frontend
+  for React or a CLI without touching any backend code.
 - **Observable** — MLflow tracks every ingestion run and every agent turn,
-  including per-turn grounding status and retrieval quality scores.
+  including per-turn grounding status and retrieval quality scores. Uses SQLite
+  so all MLflow 3.x UI tabs (Overview, Experiments, Traces) are fully functional.
 - **Enterprise-ready dependencies** — every package is MIT, Apache 2.0, or
   BSD 3-Clause licensed. No GPL. No SaaS-only dependencies.
 
@@ -54,60 +59,24 @@ numbers. When it cannot find an answer, it says so and lists what it does have.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                        Streamlit UI                      │
-│                        ui/app.py                         │
-└────────────────────────┬────────────────────────────────┘
-                         │ run_turn()
-┌────────────────────────▼────────────────────────────────┐
-│                     AgentRunner                          │
-│              doc_qa/agent/runner.py                      │
-│   • session memory   • grounding check   • MLflow log    │
-└────────────────────────┬────────────────────────────────┘
-                         │ graph.invoke()
-┌────────────────────────▼────────────────────────────────┐
-│                   LangGraph StateGraph                   │
-│               doc_qa/agent/graph.py                      │
-│                                                          │
-│   START → [agent] ──tool call──→ [tools]                │
-│               ▲                      │                   │
-│               │                      ▼                   │
-│               └──── [validate_tool_results] ◄────────── │
-│                      (retry hint if empty)               │
-└──────────┬──────────────────────────┬───────────────────┘
-           │ LLM calls                │ tool calls
-┌──────────▼──────┐        ┌──────────▼──────────────────┐
-│  Anthropic /    │        │  5 Tools                     │
-│  OpenAI LLM     │        │  • search_documents          │
-│                 │        │  • list_documents            │
-└─────────────────┘        │  • summarize_document        │
-                           │  • classify_document         │
-                           │  • calculate                 │
-                           └──────────┬───────────────────┘
-                                      │
-┌─────────────────────────────────────▼───────────────────┐
-│                    VectorStore ABC                       │
-│               doc_qa/store/base.py                       │
-└─────────────────────────────────────┬───────────────────┘
-                                      │
-              ┌───────────────────────▼────────────────┐
-              │         ChromaVectorStore               │
-              │         doc_qa/store/chroma.py          │
-              │   (swap → SnowflakeCortexVectorStore)   │
-              └────────────────────────────────────────┘
+Browser → Streamlit (ui/app.py)       :8501
+              │  HTTP (requests)
+              ▼
+         FastAPI (api/main.py)         :8000
+              │
+              ├── AgentRunner (singleton)
+              │       │  graph.invoke()
+              │       ▼
+              │   LangGraph StateGraph
+              │   START → [agent] ──tool call──→ [tools]
+              │               ▲                      │
+              │               └── [validate_results] ◄
+              │
+              ├── ChromaVectorStore (singleton)
+              └── EmbeddingProvider (singleton)
 
-┌────────────────────────────────────────────────────────┐
-│               Ingestion Pipeline                        │
-│                                                        │
-│  File  →  parsers.py  →  chunker.py  →  pipeline.py   │
-│              │               │               │         │
-│           parse_pdf       sliding         embed +      │
-│           parse_docx      window          store +      │
-│           parse_csv       overlap         MLflow run   │
-│           parse_json      dedup.py                     │
-│           parse_md        (SHA-256)                    │
-│           parse_txt                                    │
-└────────────────────────────────────────────────────────┘
+MLflow (sqlite:///mlruns.db)           :5000
+ChromaDB (./chroma_db/)
 ```
 
 ### Module boundaries
@@ -116,14 +85,16 @@ numbers. When it cannot find an answer, it says so and lists what it does have.
 |---|---|---|
 | Configuration | `config/settings.py` | Any `doc_qa` module |
 | Storage abstraction | `doc_qa/store/base.py` | Any concrete store |
-| Storage implementation | `doc_qa/store/chroma.py` | `agent`, `ingestion`, `ui` |
-| Embedding | `doc_qa/embeddings.py` | `store`, `agent`, `ui` |
-| Ingestion | `doc_qa/ingestion/` | `agent`, `ui` |
-| Agent tools | `doc_qa/agent/tools.py` | `ui`, `ingestion` |
-| Agent graph | `doc_qa/agent/graph.py` | `ui`, `ingestion` |
-| Agent runner | `doc_qa/agent/runner.py` | `ui` |
-| Observability | `doc_qa/observability.py` | `agent`, `ingestion`, `store`, `ui` |
-| UI | `ui/app.py` | `graph.py`, `store` directly |
+| Storage implementation | `doc_qa/store/chroma.py` | `agent`, `ingestion`, `ui`, `api` |
+| Embedding | `doc_qa/embeddings.py` | `store`, `agent`, `ui`, `api` |
+| Ingestion | `doc_qa/ingestion/` | `agent`, `ui`, `api` |
+| Agent tools | `doc_qa/agent/tools.py` | `ui`, `ingestion`, `api` |
+| Agent graph | `doc_qa/agent/graph.py` | `ui`, `ingestion`, `api` |
+| Agent runner | `doc_qa/agent/runner.py` | `ui`, `api` |
+| Observability | `doc_qa/observability.py` | `agent`, `ingestion`, `store`, `ui`, `api` |
+| API layer | `api/main.py` | `graph.py`, `store` directly |
+| API dependencies | `api/dependencies.py` | `ui` |
+| UI | `ui/app.py` | Everything except `config/settings.py` and `requests` |
 
 ---
 
@@ -230,25 +201,20 @@ See [Configuration](#configuration) for all options.
 make ingest
 ```
 
-This ingests all documents in `docs/` — five banking documents covering loan
-applications, lending policy, mortgage FAQ, rate tables, and a TILA disclosure.
+This ingests all documents in `docs/` — nine banking documents covering loan
+applications, closing disclosures, loan estimates, settlement statements,
+underwriting guidelines, rate sheets, product catalog, FAQ, and a TILA disclosure.
 Duplicate files are skipped automatically (SHA-256 hash check).
 
-Expected output:
+### Start the API + UI
 
-```
-✓ loan_application.pdf     — 42 chunks  (1.3s embed)
-✓ lending_policy.pdf       — 67 chunks  (2.1s embed)
-✓ mortgage_faq.md          — 38 chunks  (1.2s embed)
-✓ loan_rates.csv           — 18 chunks  (0.6s embed)
-✓ tila_disclosure.txt      — 24 chunks  (0.8s embed)
-
-Total: 189 chunks ingested across 5 documents.
-```
-
-### Start the UI
+Two terminals:
 
 ```bash
+# Terminal 1: FastAPI backend on :8000
+make api
+
+# Terminal 2: Streamlit frontend on :8501
 make ui
 ```
 
@@ -256,14 +222,32 @@ Open [http://localhost:8501](http://localhost:8501).
 
 ### Start MLflow (optional, recommended)
 
-In a second terminal:
+In a third terminal:
 
 ```bash
 make mlflow
 ```
 
 Open [http://localhost:5000](http://localhost:5000) to view ingestion runs and
-agent session traces.
+agent session traces. All tabs (Overview, Experiments, Traces) are fully functional
+because MLflow is backed by SQLite.
+
+---
+
+## API Reference
+
+The FastAPI backend exposes a REST API at `http://localhost:8000`. Interactive docs
+are available at [http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness check → `{"status": "ok"}` |
+| `GET` | `/status` | Corpus stats + provider settings |
+| `POST` | `/sessions` | Create a new chat session → `{session_id, mlflow_run_id}` |
+| `POST` | `/sessions/{id}/chat` | Send a message → `{response, session_id}` |
+| `GET` | `/sessions/{id}` | Retrieve session message history |
+| `GET` | `/documents` | List all ingested documents with chunk counts |
+| `POST` | `/documents/ingest` | Upload and ingest a file (multipart form) → `IngestResponse` |
 
 ---
 
@@ -285,9 +269,10 @@ The full reference is in `.env.example`. Key settings:
 | `CHUNK_SIZE` | `512` | Characters per chunk (approximate) |
 | `CHUNK_OVERLAP` | `64` | Overlap between consecutive chunks |
 | `PDF_OCR_THRESHOLD` | `50` | Mean chars/page below which OCR is triggered. Set to `0` to disable OCR fallback. |
-| `MLFLOW_TRACKING_URI` | `./mlruns` | MLflow backend. Swap to `s3://bucket/mlruns` for AWS. |
+| `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` | MLflow backend. SQLite required for MLflow 3.x GenAI UI. Swap to `s3://bucket/mlruns.db` for AWS. |
 | `DEFAULT_TOP_K` | `5` | Number of chunks returned per search |
 | `MAX_TOOL_RETRIES` | `2` | Max automatic search retries per agent turn |
+| `API_BASE_URL` | `http://localhost:8000` | FastAPI backend URL (used by Streamlit) |
 
 > **Important:** Once documents are ingested with a given `EMBEDDING_PROVIDER`,
 > the corpus cannot be queried with a different provider — the vector spaces are
@@ -297,7 +282,8 @@ The full reference is in `.env.example`. Key settings:
 
 ## Running with Docker
 
-Docker Compose runs the Streamlit app and a local MLflow tracking server:
+Docker Compose runs three services: the FastAPI backend, the Streamlit frontend,
+and a local MLflow tracking server:
 
 ```bash
 cp .env.example .env
@@ -309,9 +295,10 @@ docker-compose up
 | Service | URL |
 |---|---|
 | Streamlit UI | http://localhost:8501 |
+| FastAPI backend | http://localhost:8000 |
 | MLflow UI | http://localhost:5000 |
 
-Data is persisted in `./chroma_db/` and `./mlruns/` via volume mounts — it
+Data is persisted in `./chroma_db/` and `./mlflow_data/` via volume mounts — it
 survives container restarts.
 
 To rebuild after code changes:
@@ -334,9 +321,10 @@ make type-check   # mypy on doc_qa/
 make test         # pytest with 80% coverage gate
 make test-cov     # pytest + HTML coverage report (htmlcov/)
 make ingest       # ingest docs/ directory
-make ui           # start Streamlit
+make api          # start FastAPI on :8000 (with --reload)
+make ui           # start Streamlit on :8501
 make mlflow       # start MLflow UI on :5000
-make clean        # remove chroma_db/, mlruns/, caches
+make clean        # remove chroma_db/, mlruns.db, caches
 make docker-build # build Docker image
 make docker-up    # docker-compose up
 ```
@@ -349,7 +337,7 @@ make test
 
 Tests run against a real in-memory ChromaDB instance (`EphemeralClient`) — not
 a mock. LLM calls are mocked with deterministic `AIMessage` responses. The 80%
-coverage gate is enforced; `ui/` and `cli/` are excluded from measurement.
+coverage gate is enforced; `ui/`, `cli/`, and `api/` are excluded from measurement.
 
 ```bash
 # View HTML coverage report
@@ -392,6 +380,11 @@ python -m cli.ingest_cli status
 ```
 doc-qa-agent/
 ├── .github/workflows/ci.yml   # GitHub Actions: lint → type-check → test
+├── api/
+│   ├── __init__.py
+│   ├── dependencies.py         # Singleton lifecycle + in-memory session store
+│   ├── main.py                 # FastAPI app + all route handlers
+│   └── models.py               # Pydantic request/response schemas
 ├── cli/ingest_cli.py           # Typer CLI for ingestion
 ├── config/settings.py          # Pydantic-settings BaseSettings
 ├── doc_qa/
@@ -409,7 +402,7 @@ doc-qa-agent/
 │       ├── tools.py            # 5 LangGraph tools
 │       ├── graph.py            # StateGraph + validate_tool_results node
 │       └── runner.py           # Session memory + grounding check
-├── ui/app.py                   # Streamlit chat interface
+├── ui/app.py                   # Streamlit frontend (HTTP client only)
 ├── tests/                      # pytest suite (80% coverage gate)
 ├── docs/                       # Sample banking document corpus
 ├── Dockerfile
@@ -421,7 +414,7 @@ doc-qa-agent/
 
 ## Document Corpus
 
-The `docs/` directory contains eight banking documents across six file types. They are
+The `docs/` directory contains nine banking documents across six file types. They are
 designed to require cross-document retrieval — most interesting questions cannot be
 answered from a single document. All fictional documents use **Meridian Bank of
 Springfield, N.A.** as the issuing institution. No real PII is present in any document.
@@ -457,6 +450,7 @@ curl -L "https://files.consumerfinance.gov/f/201311_cfpb_kbyo_loan-estimate.pdf"
 | `mortgage_rate_sheet.csv` | CSV | 18 rows of current product rates with columns: `product`, `loan_type`, `term_months`, `rate_pct`, `apr_pct`, `points`, `min_credit_score`, `max_ltv_pct`, `max_dti_pct`, `requires_pmi_above_80_ltv`, `effective_date`, `notes` |
 | `tila_disclosure_statement.txt` | TXT | Complete Truth in Lending Act disclosure for a fictional $285,000 30-year fixed mortgage — APR, finance charge, amount financed, total of payments, payment schedule, late charge terms, prepayment clause, and assumption clause |
 | `loan_products_catalog.json` | JSON | Array of 10 loan product objects with full qualification data per product: credit score minimums, max LTV/DTI, PMI rules, MIP/funding fee details, eligible property types, eligible occupancy types, and reserve requirements |
+| `hud1_settlement_statement.pdf` | PDF | HUD-1 Settlement Statement (fictional) — itemized closing costs, loan charges, settlement charges, prorations, and cash to close |
 
 ### Cross-document query map
 
@@ -484,28 +478,26 @@ corpus. Each shows which tools the agent calls.
 
 **Q: What credit score is required for a 30-year fixed mortgage, and what rate would I get today?**
 
-> Tools called: `search_documents` (lending_policy.pdf) → `search_documents` (loan_rates.csv)
+> Tools called: `search_documents` (underwriting_guidelines.docx) → `search_documents` (mortgage_rate_sheet.csv)
 
-> A: According to the First National Bank of Plainview Lending Policy
-> (lending_policy.pdf, page 2), the minimum credit score for a conforming
+> A: According to the Meridian Bank of Springfield Underwriting Guidelines
+> (underwriting_guidelines.docx, section 2), the minimum credit score for a conforming
 > 30-year fixed mortgage is 620. Borrowers with scores below 680 are subject
 > to additional compensating factor requirements. Per the current rate sheet
-> (loan_rates.csv, effective 2024-01-15), the 30-year fixed rate is 7.125%
+> (mortgage_rate_sheet.csv), the 30-year fixed conforming rate is 7.125%
 > with an APR of 7.284% and 0.5 points.
 
 ---
 
-**Q: What type of document is tila_disclosure.txt?**
+**Q: What type of document is tila_disclosure_statement.txt?**
 
-> Tools called: `classify_document` (tila_disclosure.txt)
+> Tools called: `classify_document` (tila_disclosure_statement.txt)
 
-> A: `tila_disclosure.txt` is a **Truth in Lending Act (TILA) Disclosure
+> A: `tila_disclosure_statement.txt` is a **Truth in Lending Act (TILA) Disclosure
 > Statement**, also known as a Reg Z disclosure. This is a federally mandated
 > form under 15 U.S.C. § 1601 that discloses the APR, finance charge, amount
 > financed, total of payments, and payment schedule to the borrower prior to
-> loan consummation. The document's structure — with labeled fields for APR,
-> Finance Charge, Amount Financed, and Total of Payments — is consistent with
-> the standard TILA disclosure format.
+> loan consummation.
 
 ---
 
@@ -541,30 +533,20 @@ corpus. Each shows which tools the agent calls.
 
 **Q: Summarize the mortgage FAQ document.**
 
-> Tools called: `list_documents` → `summarize_document` (mortgage_faq.md)
+> Tools called: `list_documents` → `summarize_document` (mortgage_products_faq.md)
 
-> A: The mortgage FAQ (mortgage_faq.md) covers five main areas:
->
-> **Loan types** — fixed vs. adjustable-rate mortgages, including how ARM
-> adjustment caps work and when each product is appropriate.
->
-> **Costs** — breakdown of closing costs, points, PMI requirements (triggered
-> below 80% LTV), and how to calculate when PMI cancellation applies.
->
-> **Process** — pre-approval vs. pre-qualification, what documents are required,
-> typical timeline from application to close.
->
-> **Refinancing** — break-even calculation for refinancing decisions, cash-out
-> vs. rate-and-term refinancing, and prepayment penalty considerations.
->
-> **Escrow** — how escrow accounts work, what they cover (taxes and insurance),
-> and how escrow analysis adjustments are calculated annually.
+> A: The mortgage FAQ (mortgage_products_faq.md) covers seven main areas:
+> mortgage types, loan types, qualification criteria, PMI, escrow, closing costs,
+> and refinancing.
 
 ---
 
 ## Observability
 
-MLflow tracks two categories of runs under the `doc-qa-agent` experiment:
+MLflow tracks two categories of runs under the `doc-qa-agent` experiment.
+MLflow 3.x requires a SQL backend for the GenAI-oriented UI — this project
+uses `sqlite:///mlruns.db` by default, which enables all tabs including
+Overview, Experiments, and Traces.
 
 ### Ingestion runs
 
@@ -595,7 +577,7 @@ with `step=turn_index`:
 | `retrieval_score_max` | Metric (per step) | Best matching chunk score |
 | `retrieval_score_min` | Metric (per step) | Weakest matching chunk score |
 | `tool_calls` | Param (per step) | e.g., `search_documents,calculate` |
-| `tool_result_N` | Param (per step) | Content returned by the Nth tool call, truncated to 500 chars. Useful for diagnosing retrieval quality without opening a Streamlit session. |
+| `tool_result_N` | Param (per step) | Content returned by the Nth tool call, truncated to 500 chars |
 | `user_message` | Param (per step) | Truncated to 500 chars |
 
 The `grounded` metric is queryable as a time-series across sessions — use it
@@ -618,11 +600,13 @@ by `sentence-transformers` and OpenAI embeddings is incompatible. Switching
 `EMBEDDING_PROVIDER` after ingesting documents requires clearing the vector
 store (`make clean`) and re-ingesting the full corpus.
 
-**Synchronous ingestion blocks the UI.** Ingesting a large document through
-the Streamlit uploader blocks the UI thread during processing. For documents
-larger than ~50 pages, use the CLI (`python -m cli.ingest_cli ingest`) instead.
+**Synchronous ingestion blocks the API.** Ingesting a large document through
+the Streamlit uploader (which calls `POST /documents/ingest`) blocks the uvicorn
+worker thread during processing. For documents larger than ~50 pages, use the
+CLI (`python -m cli.ingest_cli ingest`) instead, or run uvicorn with multiple
+workers and wrap ingestion in `asyncio.run_in_executor`.
 
-**No authentication.** The Streamlit UI has no login or session isolation.
+**No authentication.** The API and Streamlit UI have no login or session isolation.
 All users share the same document corpus. Authentication is required before
 any production deployment.
 
@@ -630,14 +614,9 @@ any production deployment.
 concurrent writes from multiple processes. Multi-worker deployments require
 ChromaDB's HTTP server mode or a Snowflake Cortex / pgvector migration.
 
-**No separate backend process.** The agent runner, vector store, and embedding
-model all run in-process with the Streamlit UI. This is intentional for a
-single-user local tool, but means concurrent users will block each other —
-Streamlit processes one interaction at a time. For multi-user or API access,
-the right path is to extract `AgentRunner` into a FastAPI service and have
-Streamlit (or any frontend) call it over HTTP. The `AgentRunner` and
-`VectorStore` classes are already structured for this split with no logic changes
-required.
+**In-memory session store.** Agent sessions are stored in a Python dict in
+`api/dependencies.py`. Sessions are lost on API restart. For persistence,
+replace the dict with a Redis or database-backed session store.
 
 ---
 
@@ -670,10 +649,10 @@ class SnowflakeCortexVectorStore(VectorStore):
     def count(self): ...
 ```
 
-Then set the store in `pipeline.py` and `runner.py`:
+Then pass the store to the FastAPI dependencies in `api/dependencies.py`:
 
 ```python
-store = SnowflakeCortexVectorStore(snowflake_connection, table_name="doc_qa_chunks")
+_store = SnowflakeCortexVectorStore(snowflake_connection, table_name="doc_qa_chunks")
 ```
 
 No changes to the agent, ingestion pipeline, tools, or tests are required.
@@ -683,20 +662,20 @@ No changes to the agent, ingestion pipeline, tools, or tests are required.
 Zero code changes required. Update one environment variable:
 
 ```bash
-MLFLOW_TRACKING_URI=s3://your-bucket/mlruns
+MLFLOW_TRACKING_URI=s3://your-bucket/mlruns.db
 ```
 
 Ensure the application's IAM role has `s3:GetObject`, `s3:PutObject`, and
-`s3:ListBucket` on the target bucket. The MLflow tracking server (or sidecar)
-needs the same permissions.
+`s3:ListBucket` on the target bucket.
 
 ### Recommended production additions
 
 | Capability | Approach |
 |---|---|
-| Authentication | OAuth2/SAML SSO in front of Streamlit, or replace Streamlit with FastAPI + React |
-| Multi-user sessions | Replace in-memory session dict with Redis or PostgreSQL session store |
-| Async ingestion | Wrap `ingest_file` in Celery or AWS SQS for background processing |
+| Authentication | OAuth2/SAML SSO via FastAPI middleware, or add Auth0/Cognito to the API |
+| Multi-user sessions | Replace in-memory `_sessions` dict in `api/dependencies.py` with Redis or PostgreSQL |
+| FastAPI scaling | Add `--workers N` to uvicorn, or deploy behind Gunicorn with uvicorn workers |
+| Async ingestion | Wrap `ingest_file` in `asyncio.run_in_executor` or use Celery/SQS for background processing |
 | Re-ranking | Add `cross-encoder/ms-marco-MiniLM-L-6-v2` as a re-ranking pass after retrieval |
 | Semantic grounding | LLM-as-judge grounding verification (opt-in via `STRICT_GROUNDING=true`) |
 | SBOM generation | Add `pip-licenses` to CI, output `THIRD_PARTY_LICENSES.md` as artifact |
@@ -716,6 +695,10 @@ No GPL or LGPL dependencies. Full license inventory:
 | langchain / langgraph | MIT |
 | chromadb | Apache 2.0 |
 | mlflow | Apache 2.0 |
+| fastapi | MIT |
+| uvicorn | BSD 3-Clause |
+| httpx | BSD 3-Clause |
+| requests | Apache 2.0 |
 | streamlit | Apache 2.0 |
 | sentence-transformers | Apache 2.0 |
 | pypdf | BSD 3-Clause |

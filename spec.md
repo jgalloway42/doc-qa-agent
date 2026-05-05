@@ -4,12 +4,13 @@
 
 ## 0. Purpose of This Document
 
-This is the single source of truth for the Claude Code implementation agent. Read
-this document in its entirety before writing any code. Follow every explicit decision
-stated here rather than making assumptions. Where a section says "must not," that is a
-hard constraint. Where a section says "recommended," use judgment but document any
-deviation. All configuration values belong in `config/settings.py` — never hardcode
-them in module bodies.
+This document is the **as-built specification** for `doc-qa-agent`. It reflects the
+system as implemented, including the FastAPI backend added in phase 2 and the MLflow
+SQLite migration. Use it as the authoritative reference for architecture decisions,
+module boundaries, and configuration defaults.
+
+All configuration values belong in `config/settings.py` — never hardcode them in
+module bodies.
 
 ---
 
@@ -43,21 +44,24 @@ _Not applicable — this is a greenfield project._
 |---|---|---|---|
 | Configuration | `config/settings.py` | All env vars, constants, provider selection | Any app module |
 | Storage abstraction | `doc_qa/store/base.py` | `VectorStore` ABC | Any concrete store |
-| Storage implementation | `doc_qa/store/chroma.py` | ChromaDB adapter | `agent`, `ingestion`, `ui` |
-| Embedding | `doc_qa/embeddings.py` | `EmbeddingProvider` ABC + concrete providers | `store`, `agent`, `ui` |
-| Ingestion | `doc_qa/ingestion/` | File parsing, chunking, dedup, embedding, MLflow run | `agent`, `ui` |
-| Agent tools | `doc_qa/agent/tools.py` | All tool functions with `@tool` decorators | `ui`, `ingestion` |
-| Agent graph | `doc_qa/agent/graph.py` | LangGraph `StateGraph` definition, `validate_tool_results` node, compilation | `ui`, `ingestion` |
-| Agent runner | `doc_qa/agent/runner.py` | Session memory, `run_turn()` entry point | `ui` |
+| Storage implementation | `doc_qa/store/chroma.py` | ChromaDB adapter | `agent`, `ingestion`, `ui`, `api` |
+| Embedding | `doc_qa/embeddings.py` | `EmbeddingProvider` ABC + concrete providers | `store`, `agent`, `ui`, `api` |
+| Ingestion | `doc_qa/ingestion/` | File parsing, chunking, dedup, embedding, MLflow run | `agent`, `ui`, `api` |
+| Agent tools | `doc_qa/agent/tools.py` | All tool functions with `@tool` decorators | `ui`, `ingestion`, `api` |
+| Agent graph | `doc_qa/agent/graph.py` | LangGraph `StateGraph` definition, `validate_tool_results` node, compilation | `ui`, `ingestion`, `api` |
+| Agent runner | `doc_qa/agent/runner.py` | Session memory, `run_turn()` entry point | `ui`, `api` |
 | Observability | `doc_qa/observability.py` | MLflow helpers, decorators, retrieval quality logging | Nothing app-specific |
-| UI | `ui/app.py` | Streamlit session state, layout, calls `runner.run_turn()` | `ingestion` internals, `store` directly |
-| CLI | `cli/ingest_cli.py` | `typer` CLI entry point for ingestion | `ui` |
+| API layer | `api/main.py` | REST endpoint handlers, HTTP request/response serialization | `graph.py`, `store` directly |
+| API dependencies | `api/dependencies.py` | Singleton lifecycle (store, embedder, runner), in-memory session store | `ui` |
+| UI | `ui/app.py` | Streamlit session state, layout, HTTP calls to API | Everything except `config/settings.py` and `requests` |
+| CLI | `cli/ingest_cli.py` | `typer` CLI entry point for ingestion | `ui`, `api` |
 
 **Hard cross-boundary rules:**
 - No module outside `doc_qa/store/` imports `chromadb` directly.
 - No module outside `doc_qa/embeddings.py` imports `sentence_transformers` or `openai` embedding classes directly.
-- `ui/app.py` calls only `runner.run_turn()` and `ingestion.pipeline.ingest_file()` — never touches `graph.py` or `store` directly.
+- `ui/app.py` calls the API over HTTP only — never imports `AgentRunner`, `ChromaVectorStore`, or `ingest_file` directly.
 - `doc_qa/observability.py` must not import from `agent` or `ingestion` — it is imported by them, not the reverse.
+- `api/dependencies.py` initializes singletons at module level (not inside request handlers) — one store, one embedder, one runner per process.
 
 ### 3.2 Package / Directory Structure
 
@@ -66,17 +70,26 @@ doc-qa-agent/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
+├── api/
+│   ├── __init__.py
+│   ├── dependencies.py        # singleton lifecycle + in-memory session store
+│   ├── main.py                # FastAPI app + all route handlers
+│   └── models.py              # Pydantic request/response schemas
 ├── cli/
 │   └── ingest_cli.py          # typer CLI: ingest one or more files
 ├── config/
 │   └── settings.py            # pydantic-settings BaseSettings
 ├── docs/                      # sample document corpus (committed to repo)
-│   ├── loan_application.pdf   # provided in assignment
-│   ├── lending_policy.pdf     # created: fictional bank lending policy
-│   ├── mortgage_faq.md        # created: fictional mortgage FAQ
-│   ├── loan_rates.csv         # created: fictional rate table by product/term
-│   ├── tila_disclosure.txt    # created: fictional TILA disclosure example
-│   └── README.md              # describes each doc and its purpose
+│   ├── fannie_mae_1003_loan_application.pdf
+│   ├── cfpb_closing_disclosure.pdf
+│   ├── cfpb_loan_estimate.pdf
+│   ├── hud1_settlement_statement.pdf
+│   ├── underwriting_guidelines.docx
+│   ├── mortgage_products_faq.md
+│   ├── mortgage_rate_sheet.csv
+│   ├── tila_disclosure_statement.txt
+│   ├── loan_products_catalog.json
+│   └── README.md
 ├── doc_qa/
 │   ├── __init__.py
 │   ├── embeddings.py          # EmbeddingProvider ABC + SentenceTransformerProvider + OpenAIProvider
@@ -97,7 +110,7 @@ doc-qa-agent/
 │       ├── graph.py           # StateGraph definition
 │       └── runner.py          # session memory + run_turn()
 ├── ui/
-│   └── app.py                 # Streamlit application
+│   └── app.py                 # Streamlit frontend (HTTP client only)
 ├── tests/
 │   ├── conftest.py            # shared fixtures
 │   ├── test_parsers.py
@@ -109,7 +122,7 @@ doc-qa-agent/
 │   ├── test_tools.py
 │   ├── test_graph.py
 │   └── test_runner.py
-├── mlruns/                    # gitignored; MLflow local artifact store
+├── mlruns.db                  # gitignored; MLflow SQLite backend
 ├── chroma_db/                 # gitignored; ChromaDB persistence directory
 ├── pyproject.toml
 ├── Makefile
@@ -162,8 +175,8 @@ class Settings(BaseSettings):
     min_chunk_chars: int = 100     # discard chunks shorter than this
     pdf_ocr_threshold: int = 50    # mean chars/page below this triggers OCR fallback
 
-    # MLflow
-    mlflow_tracking_uri: str = "./mlruns"  # swap to s3://bucket/mlruns in production
+    # MLflow — SQLite required for MLflow 3.x GenAI UI (traces, overview charts)
+    mlflow_tracking_uri: str = "sqlite:///mlruns.db"
     mlflow_experiment_name: str = "doc-qa-agent"
 
     # Retrieval
@@ -171,9 +184,10 @@ class Settings(BaseSettings):
     retrieval_score_threshold: float = 0.0  # minimum cosine similarity to return
     max_tool_retries: int = 2               # max search_documents retries per agent turn
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # API
+    api_base_url: str = "http://localhost:8000"
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 settings = Settings()
 ```
@@ -893,29 +907,120 @@ def log_retrieval_quality(
 
 ### 4.13 `ui/app.py`
 
-**Purpose:** Streamlit chat interface.
+**Purpose:** Streamlit chat frontend. Pure HTTP client — all business logic lives
+in the FastAPI backend. Does not import `AgentRunner`, `ChromaVectorStore`, or any
+ingestion internals.
 
 **Layout and behavior:**
 - Sidebar:
-  - Section: **Document Corpus** — calls `store.list_documents()` and displays filenames + chunk counts.
-  - Section: **Ingest New File** — file uploader (PDF, TXT, MD, CSV, JSON, DOCX), "Ingest" button. On click: save to temp file, call `ingest_file()`, display `IngestionResult` summary. Refresh document list after ingestion.
-  - Section: **Settings** — read-only display of `settings.embedding_provider`, `settings.llm_provider`, `settings.chroma_collection_name`.
-  - Section: **MLflow** — link to `http://localhost:5000` (the tracking server). Display current session's MLflow run ID if active.
+  - Section: **Document Corpus** — calls `GET /documents` and displays filenames + chunk counts.
+  - Section: **Ingest New File** — file uploader (PDF, TXT, MD, CSV, JSON, DOCX), "Ingest" button. On click: `POST /documents/ingest` (multipart), display result summary. Refresh document list after ingestion.
+  - Section: **Settings** — read-only display of `settings.embedding_provider`, `settings.llm_provider`, `settings.chroma_collection_name`, `API_BASE_URL`.
+  - Section: **MLflow** — link to `http://localhost:5000`. Display current session's MLflow run ID if active.
 - Main area:
   - Chat message history using `st.chat_message`.
   - `st.chat_input` at the bottom.
-  - On user submit: call `runner.run_turn(session, user_message)`, display response.
-  - Show a spinner ("Agent is thinking…") during `run_turn`.
-- Session state keys: `st.session_state.agent_session`, `st.session_state.messages` (display list), `st.session_state.runner`.
-- On first load: initialize `AgentRunner`, call `runner.new_session()`.
+  - On user submit: `POST /sessions/{id}/chat`, display response.
+  - Show a spinner ("Agent is thinking…") during the request.
+- Session state keys: `st.session_state.session_id`, `st.session_state.mlflow_run_id`, `st.session_state.messages` (display list).
+- On first load: `POST /sessions` → stores `session_id` and `mlflow_run_id` in session state.
 
-**Must NOT import:** `graph.py` directly, `store` directly, any ingestion internals.
+**Must NOT import:** `AgentRunner`, `ChromaVectorStore`, `ingest_file`, `graph.py`, or any `doc_qa` internals.
 
 ---
 
 ### 4.14 `cli/ingest_cli.py`
 
 **Purpose:** Typer CLI for ingesting files from the command line.
+
+---
+
+### 4.15 `api/` package
+
+**Purpose:** FastAPI backend that owns all agent and retrieval logic. The Streamlit
+UI (and any other client) calls this API over HTTP.
+
+#### `api/models.py` — Pydantic request/response schemas
+
+```python
+class SessionResponse(BaseModel):
+    session_id: str
+    mlflow_run_id: str | None = None
+
+class ChatRequest(BaseModel):
+    message: str
+
+class ChatResponse(BaseModel):
+    response: str
+    session_id: str
+
+class MessageRecord(BaseModel):
+    role: str       # "user" | "assistant"
+    content: str
+
+class SessionHistoryResponse(BaseModel):
+    session_id: str
+    messages: list[MessageRecord]
+
+class DocumentInfo(BaseModel):
+    filename: str
+    chunk_count: int
+
+class IngestResponse(BaseModel):
+    filename: str
+    skipped: bool
+    chunks_created: int
+    embedding_time_s: float
+    total_time_s: float
+
+class StatusResponse(BaseModel):
+    total_chunks: int
+    document_count: int
+    embedding_provider: str
+    llm_provider: str
+    collection_name: str
+```
+
+#### `api/dependencies.py` — Singleton lifecycle + session store
+
+Singletons are created at **module load time** (not inside request handlers) so
+every request shares the same store, embedder, and runner:
+
+```python
+setup_mlflow()
+
+_store   = ChromaVectorStore(persist_dir, collection_name)
+_embedder = get_embedding_provider()
+_runner  = AgentRunner(store=_store, embedder=_embedder)
+_sessions: dict[str, AgentSession] = {}   # in-memory; lost on restart
+
+def get_store() -> ChromaVectorStore: ...
+def get_embedder() -> EmbeddingProvider: ...
+def get_runner() -> AgentRunner: ...
+def get_sessions() -> dict[str, AgentSession]: ...
+```
+
+#### `api/main.py` — Route handlers
+
+| Method | Path | Request body | Response |
+|--------|------|-------------|----------|
+| `GET` | `/health` | — | `{"status": "ok"}` |
+| `GET` | `/status` | — | `StatusResponse` |
+| `POST` | `/sessions` | — | `SessionResponse` |
+| `POST` | `/sessions/{session_id}/chat` | `ChatRequest` | `ChatResponse` |
+| `GET` | `/sessions/{session_id}` | — | `SessionHistoryResponse` |
+| `GET` | `/documents` | — | `list[DocumentInfo]` |
+| `POST` | `/documents/ingest` | multipart `file` | `IngestResponse` |
+
+All `Depends(...)` calls use `# noqa: B008` to suppress the ruff B008 false positive
+(same pattern as Typer's `Argument`/`Option` defaults).
+
+**Session lifecycle:** `POST /sessions` calls `runner.new_session()`, stores the
+`AgentSession` in `_sessions[session_id]`, and returns the ID + MLflow run ID.
+`POST /sessions/{id}/chat` looks up the session by ID, calls `runner.run_turn()`,
+and returns the response string.
+
+**Interactive docs:** `http://localhost:8000/docs` (Swagger UI, built into FastAPI).
 
 ```bash
 # Usage examples:
@@ -964,8 +1069,12 @@ dependencies = [
     "python-docx>=1.1.0",
     "sentence-transformers>=3.0.0",
     "simpleeval>=1.0.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "requests>=2.32.0",
     "streamlit>=1.38.0",
     "typer>=0.12.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [project.optional-dependencies]
@@ -975,10 +1084,14 @@ dev = [
     "pytest-mock>=3.14.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
+    "reportlab>=4.0.0",
 ]
 
 [project.scripts]
 doc-qa-ingest = "cli.ingest_cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["doc_qa", "config", "cli", "ui", "api"]
 
 [tool.ruff]
 line-length = 100
@@ -1155,7 +1268,7 @@ jobs:
       EMBEDDING_PROVIDER: sentence_transformers
       LLM_PROVIDER: anthropic
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      MLFLOW_TRACKING_URI: ./test_mlruns
+      MLFLOW_TRACKING_URI: sqlite:///test_mlruns.db
       CHROMA_PERSIST_DIR: ./test_chroma_db
     steps:
       - uses: actions/checkout@v4
@@ -1166,11 +1279,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils
       - name: Install dependencies
         run: pip install -e ".[dev]"
+      - name: Run tests with coverage
         run: pytest --cov=doc_qa --cov-report=xml --cov-fail-under=80
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.xml
 ```
 
 **Notes:**
@@ -1182,7 +1292,7 @@ jobs:
 ## 8. Makefile
 
 ```makefile
-.PHONY: install lint format type-check test test-cov ingest ui mlflow clean
+.PHONY: install lint format type-check test test-cov ingest api ui mlflow clean docker-build docker-up
 
 install:
 	pip install -e ".[dev]"
@@ -1206,14 +1316,17 @@ test-cov:
 ingest:
 	python -m cli.ingest_cli ingest docs/
 
+api:
+	uvicorn api.main:app --reload --port 8000
+
 ui:
 	streamlit run ui/app.py
 
 mlflow:
-	mlflow ui --backend-store-uri ./mlruns --port 5000
+	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
 
 clean:
-	rm -rf chroma_db/ mlruns/ test_mlruns/ test_chroma_db/ .ingested_hashes.json __pycache__/ .pytest_cache/ htmlcov/ coverage.xml
+	rm -rf chroma_db/ mlruns/ mlruns.db mlflow_data/ test_mlruns/ test_mlruns.db test_chroma_db/ .ingested_hashes.json __pycache__/ .pytest_cache/ htmlcov/ coverage.xml
 
 docker-build:
 	docker build -t doc-qa-agent .
@@ -1255,14 +1368,18 @@ MIN_CHUNK_CHARS=100
 # Mean chars/page below this triggers OCR fallback for PDFs (0 to disable OCR fallback)
 PDF_OCR_THRESHOLD=50
 
-# MLflow — swap to s3://your-bucket/mlruns for AWS production deployment
-MLFLOW_TRACKING_URI=./mlruns
+# MLflow — SQLite required for MLflow 3.x GenAI UI (traces, overview charts)
+# Swap to s3://your-bucket/mlruns.db for AWS production deployment
+MLFLOW_TRACKING_URI=sqlite:///mlruns.db
 MLFLOW_EXPERIMENT_NAME=doc-qa-agent
 
 # Retrieval
 DEFAULT_TOP_K=5
 RETRIEVAL_SCORE_THRESHOLD=0.0
 MAX_TOOL_RETRIES=2             # max search_documents retries per agent turn before proceeding
+
+# API backend URL (used by Streamlit UI to reach FastAPI)
+API_BASE_URL=http://localhost:8000
 ```
 
 ### `Dockerfile`
@@ -1295,26 +1412,40 @@ CMD ["streamlit", "run", "ui/app.py", "--server.port=8501", "--server.address=0.
 ```yaml
 version: "3.9"
 services:
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./mlflow_data:/app/mlflow_data
+      - ./.ingested_hashes.json:/app/.ingested_hashes.json
+    env_file:
+      - .env
+    environment:
+      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlruns.db
+
   app:
     build: .
     ports:
       - "8501:8501"
-    volumes:
-      - ./chroma_db:/app/chroma_db
-      - ./mlruns:/app/mlruns
-      - ./.ingested_hashes.json:/app/.ingested_hashes.json
     env_file:
       - .env
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      - api
 
   mlflow:
     image: python:3.11-slim
     command: >
       sh -c "pip install mlflow -q &&
-             mlflow ui --backend-store-uri /mlruns --host 0.0.0.0 --port 5000"
+             mlflow ui --backend-store-uri sqlite:////mlflow_data/mlruns.db --host 0.0.0.0 --port 5000"
     ports:
       - "5000:5000"
     volumes:
-      - ./mlruns:/mlruns
+      - ./mlflow_data:/mlflow_data
 ```
 
 ---
@@ -1359,16 +1490,16 @@ These are NOT being built in v1, but the architecture must not foreclose them:
    Adding the tool is 10 lines in `tools.py`. Noted as stretch goal.
 
 5. **Multi-user sessions**: `AgentRunner.new_session()` already returns `AgentSession`
-   objects with UUIDs. Storing them in a dict or database is the only addition needed.
+   objects with UUIDs. The `_sessions` dict in `api/dependencies.py` is the only thing
+   that needs to be replaced with a Redis or database-backed store.
 
-6. **Async ingestion**: `ingest_file` is currently synchronous. The signature is
-   compatible with wrapping in `asyncio.to_thread()` when a FastAPI backend is added.
+6. **Async ingestion**: `ingest_file` is currently synchronous. The FastAPI backend
+   is in place — wrapping ingestion in `asyncio.run_in_executor` or a task queue
+   (Celery, SQS) requires no changes to `ingest_file` itself.
 
 ---
 
 ## 12. Implementation Order
-
-Implement strictly in this order. Each step must have passing tests before proceeding.
 
 1. `config/settings.py` — foundation; everything else imports it
 2. `doc_qa/embeddings.py` — needed by store and ingestion
@@ -1380,14 +1511,16 @@ Implement strictly in this order. Each step must have passing tests before proce
 8. `doc_qa/observability.py` — MLflow helpers (needed by pipeline and runner)
 9. `doc_qa/ingestion/pipeline.py` — full ingestion; test with `test_pipeline.py`
 10. `cli/ingest_cli.py` — CLI wrapper; run `make ingest` to ingest `docs/`
-11. `docs/` — create all 5 sample documents
+11. `docs/` — nine sample banking documents
 12. `doc_qa/agent/tools.py` — all 5 tools; test with `test_tools.py`
 13. `doc_qa/agent/graph.py` — LangGraph graph; test with `test_graph.py`
 14. `doc_qa/agent/runner.py` — session runner; test with `test_runner.py`
 15. `ui/app.py` — Streamlit UI (no unit tests; verify manually)
-16. `Dockerfile` + `docker-compose.yml` — verify `docker-compose up` starts both services
+16. `Dockerfile` + `docker-compose.yml` — verify `docker-compose up` starts all services
 17. `.github/workflows/ci.yml` — verify CI passes on a push
-18. `README.md` — complete with setup, usage, architecture diagram, and production migration notes
+18. `README.md` — initial documentation
+19. `api/` package — `models.py`, `dependencies.py`, `main.py`; refactor `ui/app.py` to HTTP client; update `pyproject.toml`, `Makefile`, `docker-compose.yml`, `.env.example`, `.gitignore`, `ci.yml`; switch MLflow to SQLite
+20. `README.md` + `spec.md` — as-built documentation updates
 
 ---
 
@@ -1398,19 +1531,21 @@ Implement strictly in this order. Each step must have passing tests before proce
 - [ ] `make format` reports no files would be reformatted
 - [ ] `make type-check` exits 0 (no mypy errors in `doc_qa/`)
 - [ ] `make test` exits 0 with ≥80% coverage on `doc_qa/`
-- [ ] `make ingest` successfully ingests all 5 docs in `docs/` and prints results
-- [ ] `make ui` starts Streamlit at `localhost:8501` without errors
-- [ ] `make mlflow` starts MLflow UI at `localhost:5000` and shows ingestion runs
-- [ ] The following 5 Q&A pairs work correctly in the UI (manual verification):
-  1. **Multi-doc retrieval**: "What credit score is required for a 30-year fixed mortgage and what rate would I get?" → agent searches `lending_policy.pdf` and `loan_rates.csv`
-  2. **Document classification**: "What type of document is tila_disclosure.txt?" → agent calls `classify_document`, returns "TILA Disclosure"
-  3. **Summarization**: "Summarize the mortgage FAQ document" → agent calls `summarize_document("mortgage_faq.md")`
+- [ ] `make ingest` successfully ingests all documents in `docs/` and prints results
+- [ ] `make api` starts FastAPI at `localhost:8000` without errors
+- [ ] `curl localhost:8000/health` returns `{"status":"ok"}`
+- [ ] `make ui` starts Streamlit at `localhost:8501` and the UI successfully calls the API
+- [ ] `make mlflow` starts MLflow UI at `localhost:5000` with all tabs (Overview, Experiments, Traces) functional
+- [ ] The following Q&A scenarios work correctly in the UI (manual verification):
+  1. **Multi-doc retrieval**: "Would a borrower with a 660 credit score and 85% LTV qualify for a conventional loan, and what rate would they get?" → agent searches `underwriting_guidelines.docx` and `mortgage_rate_sheet.csv`
+  2. **Document classification**: "What type of document is tila_disclosure_statement.txt?" → agent calls `classify_document`, returns "TILA Disclosure"
+  3. **Summarization**: "Summarize the mortgage FAQ document" → agent calls `summarize_document("mortgage_products_faq.md")`
   4. **Financial calculation**: "What would the monthly payment be on a $250,000 loan at 6.5% for 30 years?" → agent calls `calculate`
   5. **Follow-up memory**: After Q4, ask "What about for 15 years instead?" → agent uses conversation history, recalculates without re-asking for loan amount
-- [ ] MLflow UI shows: ingestion runs with chunk counts and embedding time; agent sessions with turn-level latency and tool calls
-- [ ] `docker-compose up` starts the app and MLflow service; app is accessible at `localhost:8501`
+- [ ] MLflow UI shows: ingestion runs with chunk counts and embedding time; agent sessions with turn-level latency, tool calls, and grounding metrics
+- [ ] `docker-compose up` starts all three services (api :8000, app :8501, mlflow :5000)
 - [ ] GitHub Actions CI passes on `main` branch (lint → type-check → test)
-- [ ] `README.md` contains: setup instructions, architecture overview, sample Q&A, and a "Production Migration to Snowflake Cortex" section
+- [ ] `README.md` and `spec.md` reflect as-built architecture including FastAPI layer and SQLite MLflow
 
 ---
 

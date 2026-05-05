@@ -38,14 +38,17 @@ class Settings(BaseSettings):
     min_chunk_chars: int = 100
     pdf_ocr_threshold: int = 50
 
-    # MLflow
-    mlflow_tracking_uri: str = "./mlruns"
+    # MLflow — SQLite backend required for MLflow 3.x GenAI UI (traces, overview)
+    mlflow_tracking_uri: str = "sqlite:///mlruns.db"
     mlflow_experiment_name: str = "doc-qa-agent"
 
     # Retrieval
     default_top_k: int = 5
     retrieval_score_threshold: float = 0.0
     max_tool_retries: int = 2
+
+    # API
+    api_base_url: str = "http://localhost:8000"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

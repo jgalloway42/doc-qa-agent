@@ -3,15 +3,14 @@
 import tempfile
 from pathlib import Path
 
+import requests
 import streamlit as st
 
 from config.settings import settings
-from doc_qa.agent.runner import AgentRunner
-from doc_qa.embeddings import get_embedding_provider
-from doc_qa.ingestion.pipeline import ingest_file
-from doc_qa.store.chroma import ChromaVectorStore
 
 st.set_page_config(page_title="Doc QA Agent", page_icon="📄", layout="wide")
+
+API = settings.api_base_url
 
 
 # ---------------------------------------------------------------------------
@@ -20,25 +19,22 @@ st.set_page_config(page_title="Doc QA Agent", page_icon="📄", layout="wide")
 
 
 def _init_session() -> None:
-    if "runner" not in st.session_state:
-        store = ChromaVectorStore(
-            persist_dir=settings.chroma_persist_dir,
-            collection_name=settings.chroma_collection_name,
-        )
-        embedder = get_embedding_provider()
-        st.session_state.store = store
-        st.session_state.embedder = embedder
-        st.session_state.runner = AgentRunner(store, embedder)
-        st.session_state.agent_session = st.session_state.runner.new_session()
+    if "session_id" not in st.session_state:
+        resp = requests.post(f"{API}/sessions", timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        st.session_state.session_id = data["session_id"]
+        st.session_state.mlflow_run_id = data.get("mlflow_run_id")
         st.session_state.messages = []  # display list: {"role": ..., "content": ...}
 
 
 _init_session()
 
-runner: AgentRunner = st.session_state.runner
-agent_session = st.session_state.agent_session
-store: ChromaVectorStore = st.session_state.store
-embedder = st.session_state.embedder
+
+def _list_documents() -> list[dict]:
+    resp = requests.get(f"{API}/documents", timeout=10)
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -48,11 +44,10 @@ embedder = st.session_state.embedder
 with st.sidebar:
     # --- Document Corpus ---
     st.header("📚 Document Corpus")
-    filenames = store.list_documents()
-    if filenames:
-        for fn in filenames:
-            count = len(store.get_chunks_for_document(fn))
-            st.caption(f"• {fn} ({count} chunks)")
+    docs = _list_documents()
+    if docs:
+        for doc in docs:
+            st.caption(f"• {doc['filename']} ({doc['chunk_count']} chunks)")
     else:
         st.caption("No documents ingested yet.")
 
@@ -70,16 +65,24 @@ with st.sidebar:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(uploaded.read())
             tmp_path = Path(tmp.name)
-        with st.spinner(f"Ingesting {uploaded.name}…"):
-            result = ingest_file(tmp_path, store, embedder)
-        tmp_path.unlink(missing_ok=True)
-        if result.skipped:
-            st.info(f"{uploaded.name}: already ingested (skipped).")
-        else:
-            st.success(
-                f"{uploaded.name}: {result.chunks_created} chunks added "
-                f"in {result.total_time_s:.1f}s."
+        with st.spinner(f"Ingesting {uploaded.name}…"), open(tmp_path, "rb") as fh:
+            resp = requests.post(
+                f"{API}/documents/ingest",
+                files={"file": (uploaded.name, fh)},
+                timeout=120,
             )
+        tmp_path.unlink(missing_ok=True)
+        if resp.status_code == 200:
+            result = resp.json()
+            if result["skipped"]:
+                st.info(f"{uploaded.name}: already ingested (skipped).")
+            else:
+                st.success(
+                    f"{uploaded.name}: {result['chunks_created']} chunks added "
+                    f"in {result['total_time_s']:.1f}s."
+                )
+        else:
+            st.error(f"Ingest failed: {resp.text}")
         st.rerun()
 
     st.divider()
@@ -89,14 +92,15 @@ with st.sidebar:
     st.caption(f"Embedding: `{settings.embedding_provider}`")
     st.caption(f"LLM: `{settings.llm_provider}`")
     st.caption(f"Collection: `{settings.chroma_collection_name}`")
+    st.caption(f"API: `{API}`")
 
     st.divider()
 
     # --- MLflow ---
     st.header("📊 MLflow")
     st.markdown("[Open MLflow UI](http://localhost:5000)", unsafe_allow_html=True)
-    if agent_session.mlflow_run_id:
-        st.caption(f"Run ID: `{agent_session.mlflow_run_id}`")
+    if st.session_state.get("mlflow_run_id"):
+        st.caption(f"Run ID: `{st.session_state.mlflow_run_id}`")
 
 
 # ---------------------------------------------------------------------------
@@ -112,15 +116,19 @@ for msg in st.session_state.messages:
 
 # New user input
 if prompt := st.chat_input("Ask a question about your documents…"):
-    # Display user message immediately
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Call agent
     with st.chat_message("assistant"):
         with st.spinner("Agent is thinking…"):
-            response = runner.run_turn(agent_session, prompt)
+            resp = requests.post(
+                f"{API}/sessions/{st.session_state.session_id}/chat",
+                json={"message": prompt},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            response = resp.json()["response"]
         st.markdown(response)
 
     st.session_state.messages.append({"role": "assistant", "content": response})

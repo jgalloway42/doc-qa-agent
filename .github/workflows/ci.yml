@@ -30,7 +30,7 @@ jobs:
       EMBEDDING_PROVIDER: sentence_transformers
       LLM_PROVIDER: anthropic
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      MLFLOW_TRACKING_URI: ./test_mlruns
+      MLFLOW_TRACKING_URI: sqlite:///test_mlruns.db
       CHROMA_PERSIST_DIR: ./test_chroma_db
     steps:
       - uses: actions/checkout@v4
