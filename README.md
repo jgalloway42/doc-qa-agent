@@ -7,8 +7,8 @@ refuses to answer from general knowledge.
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![CI](https://github.com/your-org/doc-qa-agent/actions/workflows/ci.yml/badge.svg)
-![Coverage](https://codecov.io/gh/your-org/doc-qa-agent/branch/main/graph/badge.svg)
+![CI](https://github.com/jgalloway42/doc-qa-agent/actions/workflows/ci.yml/badge.svg)
+![Coverage](https://codecov.io/gh/jgalloway42/doc-qa-agent/branch/main/graph/badge.svg)
 
 ---
 
@@ -195,7 +195,7 @@ of banking documents) do not require OCR.
 ### Install
 
 ```bash
-git clone https://github.com/your-org/doc-qa-agent.git
+git clone https://github.com/jgalloway42/doc-qa-agent.git
 cd doc-qa-agent
 
 # Create and activate a virtual environment
@@ -275,9 +275,11 @@ The full reference is in `.env.example`. Key settings:
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_PROVIDER` | `anthropic` | `anthropic` or `openai` |
+| `LLM_PROVIDER` | `anthropic` | `anthropic`, `openai`, or `ollama` |
 | `ANTHROPIC_API_KEY` | — | Required if `LLM_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | — | Required if `LLM_PROVIDER=openai` or `EMBEDDING_PROVIDER=openai` |
+| `OLLAMA_MODEL` | `llama3.2` | Model name when `LLM_PROVIDER=ollama` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `EMBEDDING_PROVIDER` | `sentence_transformers` | `sentence_transformers` (local) or `openai` |
 | `SENTENCE_TRANSFORMERS_MODEL` | `all-MiniLM-L6-v2` | Model name for local embeddings |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | ChromaDB storage directory |
@@ -574,7 +576,7 @@ Each file ingestion creates one MLflow run with:
 | `chunks_created` | Metric | `42` |
 | `embedding_time_s` | Metric | `1.34` |
 | `total_time_s` | Metric | `1.61` |
-| `skipped` | Metric | `0` (not duplicate) |
+| `skipped` | Param | `False` (not duplicate) |
 | `filename` | Param | `loan_application.pdf` |
 | `file_hash` | Param | `a3f2...` |
 | `embedding_provider` | Param | `sentence_transformers` |
