@@ -138,6 +138,20 @@ Files are identified by SHA-256 content hash, not filename. Re-uploading a renam
 
 ## Solution
 
+### LLM and embedding providers
+
+The system supports three LLM backends, selectable via `LLM_PROVIDER`:
+
+| Provider | Models | Requirement |
+|---|---|---|
+| `anthropic` (default) | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
+| `openai` | `gpt-4o` | `OPENAI_API_KEY` |
+| `ollama` | `llama3.2` (configurable) | Local Ollama server — no API key, fully air-gapped |
+
+The Ollama path enables fully offline operation — no API key, no network dependency, no data leaving the machine. This is relevant for environments with compliance or data-residency constraints. **Note: the Ollama path is implemented but untested against the full corpus.**
+
+Embeddings are independently configurable: `sentence_transformers` (local, default) or `openai`. The fully air-gapped configuration is `LLM_PROVIDER=ollama` + `EMBEDDING_PROVIDER=sentence_transformers`.
+
 ### Agent architecture
 
 The agent is implemented as a **LangGraph `StateGraph`** following the ReAct (Reason + Act) pattern. It loops between an LLM node and a tool execution node until the LLM produces a response with no tool calls.
