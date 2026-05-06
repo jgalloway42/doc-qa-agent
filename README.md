@@ -1,28 +1,27 @@
 # doc-qa-agent
 
-An agentic document Q&A system for banking document corpora. Ingest loan documents,
-policies, disclosures, and rate sheets — then ask questions across them using a
-multi-step reasoning agent that cites its sources, retries failed searches, and
-refuses to answer from general knowledge.
+An agentic document Q&A system for banking document corpora.
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/jgalloway42/doc-qa-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jgalloway42/doc-qa-agent/actions/workflows/ci.yml)
 
+![UI Screenshot](assets/ui_screenshot.png)
+
 ---
 
 ## Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Agent Capabilities](#agent-capabilities)
+- [Abstract](#abstract)
+- [Dataset](#dataset)
+- [Data Representation and Processing](#data-representation-and-processing)
+- [Solution](#solution)
+- [Results](#results)
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
 - [Running with Docker](#running-with-docker)
 - [Development](#development)
-- [Document Corpus](#document-corpus)
-- [Sample Q&A](#sample-qa)
 - [Observability](#observability)
 - [Known Limitations](#known-limitations)
 - [Production Migration](#production-migration)
@@ -30,115 +29,362 @@ refuses to answer from general knowledge.
 
 ---
 
-## Overview
+## Abstract
 
-`doc-qa-agent` combines a document ingestion pipeline with a LangGraph-powered
-reasoning agent. The agent does not answer from general knowledge — every response
-is grounded in retrieved document passages, with citations to source files and page
-numbers. When it cannot find an answer, it says so and lists what it does have.
+Banking document Q&A is harder than general-purpose RAG for three reasons: answers routinely span multiple documents (e.g., a rate from one file, a qualification rule from another), many questions require financial arithmetic, and hallucinated citations are actively harmful in a lending context.
 
-**Key design principles:**
+This project addresses all three. The system combines a **multi-format ingestion pipeline** with a **LangGraph ReAct agent** that reasons across documents using five specialized tools before producing a final answer. Every response is enforced to be grounded in retrieved document text through a two-layer check: mandatory system-prompt rules and a post-response programmatic filename verification. When the agent cannot find an answer, it says so explicitly and lists what documents are available.
 
-- **Grounded by default** — two-layer enforcement: system prompt rules plus a
-  post-response programmatic check. Ungrounded responses are replaced with a
-  structured warning listing available documents.
-- **Modular by design** — every major component sits behind an abstract interface.
-  The vector store, embedding provider, and LLM are all swappable via environment
-  variables or a one-class implementation.
-- **Proper separation of concerns** — a FastAPI backend owns all agent and
-  retrieval logic; the Streamlit frontend is a thin HTTP client. Swap the frontend
-  for React or a CLI without touching any backend code.
-- **Observable** — MLflow tracks every ingestion run and every agent turn,
-  including per-turn grounding status and retrieval quality scores. Uses SQLite
-  so all MLflow 3.x UI tabs (Overview, Experiments, Traces) are fully functional.
-- **Enterprise-ready dependencies** — every package is MIT, Apache 2.0, or
-  BSD 3-Clause licensed. No GPL. No SaaS-only dependencies.
+**Key design decisions:**
+
+- **Grounded by default** — ungrounded responses are replaced with a structured warning, not silently returned.
+- **Modular by design** — the vector store, embedding provider, and LLM are each swappable via a one-line environment variable change.
+- **Proper separation of concerns** — FastAPI owns all agent and retrieval logic; Streamlit is a thin HTTP client. The frontend can be replaced without touching the backend.
+- **Observable** — MLflow tracks every ingestion run and every agent turn, including per-turn grounding status, latency, and tool call sequences.
 
 ---
 
-## Architecture
+## Dataset
 
-```
-Browser → Streamlit (ui/app.py)       :8501
-              │  HTTP (requests)
-              ▼
-         FastAPI (api/main.py)         :8000
-              │
-              ├── AgentRunner (singleton)
-              │       │  graph.invoke()
-              │       ▼
-              │   LangGraph StateGraph
-              │   START → [agent] ──tool call──→ [tools]
-              │               ▲                      │
-              │               └── [validate_results] ◄
-              │
-              ├── ChromaVectorStore (singleton)
-              └── EmbeddingProvider (singleton)
+The `docs/` directory contains **nine banking documents** across **six file types**. They are sourced from real government forms and purpose-built fictional documents, designed so that the most interesting questions require retrieving from multiple files simultaneously.
 
-MLflow (sqlite:///mlruns.db)           :5000
-ChromaDB (./chroma_db/)
-```
+### Documents
 
-### Module boundaries
+#### Public government sources
 
-| Layer | Module | Must NOT import |
+| Filename | Type | Contents |
 |---|---|---|
-| Configuration | `config/settings.py` | Any `doc_qa` module |
-| Storage abstraction | `doc_qa/store/base.py` | Any concrete store |
-| Storage implementation | `doc_qa/store/chroma.py` | `agent`, `ingestion`, `ui`, `api` |
-| Embedding | `doc_qa/embeddings.py` | `store`, `agent`, `ui`, `api` |
-| Ingestion | `doc_qa/ingestion/` | `agent`, `ui`, `api` |
-| Agent tools | `doc_qa/agent/tools.py` | `ui`, `ingestion`, `api` |
-| Agent graph | `doc_qa/agent/graph.py` | `ui`, `ingestion`, `api` |
-| Agent runner | `doc_qa/agent/runner.py` | `ui`, `api` |
-| Observability | `doc_qa/observability.py` | `agent`, `ingestion`, `store`, `ui`, `api` |
-| API layer | `api/main.py` | `graph.py`, `store` directly |
-| API dependencies | `api/dependencies.py` | `ui` |
-| UI | `ui/app.py` | Everything except `config/settings.py` and `requests` |
+| `fannie_mae_1003_loan_application.pdf` | PDF | Uniform Residential Loan Application (Form 1003) — filled sample with borrower info, employment, assets, liabilities, and loan details across 8 pages |
+| `cfpb_closing_disclosure.pdf` | PDF | CFPB Closing Disclosure (TRID) — 5-page completed form showing final loan terms, projected payments, itemized closing costs, and cash to close |
+| `cfpb_loan_estimate.pdf` | PDF | CFPB Loan Estimate (TRID) — 3-page completed form; pairs with the Closing Disclosure for cost-comparison questions |
+
+#### Purpose-built corpus (fictional, no real PII — issuing entity: Meridian Bank of Springfield, N.A.)
+
+| Filename | Type | Contents |
+|---|---|---|
+| `underwriting_guidelines.docx` | DOCX | 9-section internal bank policy: borrower eligibility, credit score minimums by product, DTI limits, LTV maximums, PMI rules, reserve requirements, exception approval hierarchy, and appraisal requirements |
+| `mortgage_products_faq.md` | Markdown | 30 Q&A pairs across 7 topic areas: mortgage types, loan types (conforming/jumbo/FHA/VA/USDA), qualification criteria, PMI, escrow, closing costs, and refinancing |
+| `mortgage_rate_sheet.csv` | CSV | 18 rows of current product rates: product, loan type, term, rate, APR, points, min credit score, max LTV, max DTI, PMI flag, effective date, notes |
+| `tila_disclosure_statement.txt` | TXT | Complete TILA disclosure for a fictional $285,000 30-year fixed mortgage — APR, finance charge, amount financed, total of payments, payment schedule, late charge terms, prepayment clause |
+| `loan_products_catalog.json` | JSON | Array of 10 loan product objects with full qualification data per product: credit score minimums, max LTV/DTI, PMI/MIP rules, eligible property and occupancy types, reserve requirements |
+| `hud1_settlement_statement.pdf` | PDF | HUD-1 Settlement Statement — itemized closing costs, loan charges, settlement charges, prorations, and cash to close |
+
+### Cross-document query map
+
+The corpus is structured so that the most useful questions require retrieving from multiple documents simultaneously.
+
+| Question type | Documents required | Tools called |
+|---|---|---|
+| Borrower qualification at a given credit score and LTV | `underwriting_guidelines.docx` + `mortgage_rate_sheet.csv` | `search_documents` ×2 |
+| How did closing costs change from estimate to final? | `cfpb_loan_estimate.pdf` + `cfpb_closing_disclosure.pdf` | `search_documents` ×2 |
+| FHA MIP rules and DTI limits | `loan_products_catalog.json` + `underwriting_guidelines.docx` + `mortgage_products_faq.md` | `search_documents` ×3 |
+| APR from TILA → monthly payment calculation | `tila_disclosure_statement.txt` | `search_documents` + `calculate` |
+| What documents are available and what type is each? | all | `list_documents` + `classify_document` |
 
 ---
 
-## Agent Capabilities
+## Data Representation and Processing
 
-The agent uses a **ReAct loop with validated tool execution**. It can call tools
-multiple times before producing a final answer, and it automatically retries
-failed searches with broader queries (up to `MAX_TOOL_RETRIES`, default: 2).
+### Ingestion pipeline
+
+```
+File upload (API or CLI)
+    │
+    ├── Duplicate check (SHA-256 hash store) → skip if already ingested
+    │
+    ├── Parser (per file type)
+    │       PDF    → pypdf + pytesseract OCR fallback
+    │       DOCX   → python-docx (paragraphs + table rows)
+    │       MD/TXT → line-by-line with line number provenance
+    │       CSV    → csv.DictReader, each row as JSON string
+    │       JSON   → root list → one entry per element; root dict → one per key
+    │
+    ├── Chunker — sliding window
+    │       chunk_size:     512 chars (configurable)
+    │       chunk_overlap:  64 chars (~12% of chunk size)
+    │       min_chunk_chars: 100 (filters headers/footers/noise)
+    │       metadata per chunk: filename, page/line number, chunk index
+    │
+    ├── Embedding model
+    │       Default: sentence-transformers/all-MiniLM-L6-v2 (local, no API key)
+    │       Optional: OpenAI text-embedding-3-small
+    │
+    └── ChromaDB PersistentClient
+            stored per chunk: id, text, embedding vector, filename, page_or_line, chunk_index
+```
+
+### Chunk metadata
+
+Every chunk carries three provenance fields used in citations:
+
+| Field | Example | Purpose |
+|---|---|---|
+| `filename` | `underwriting_guidelines.docx` | Identifies source document |
+| `page_or_line` | `4` | Page number (PDF/DOCX) or line number (TXT/MD/CSV/JSON) |
+| `chunk_index` | `007` | Position within document; enables ordered reconstruction |
+
+### Deduplication
+
+Files are identified by SHA-256 content hash, not filename. Re-uploading a renamed copy of an already-ingested file is correctly detected and skipped. The hash store is persisted to `.ingested_hashes.json`.
+
+### Entry points
+
+| Method | Command |
+|---|---|
+| REST API | `POST /documents/ingest` (multipart file upload, supports multiple files via UI) |
+| CLI | `python -m cli.ingest_cli ingest <file-or-directory>` |
+| Force re-ingest | `python -m cli.ingest_cli ingest <file> --force` |
+
+---
+
+## Solution
+
+### Agent architecture
+
+The agent is implemented as a **LangGraph `StateGraph`** following the ReAct (Reason + Act) pattern. It loops between an LLM node and a tool execution node until the LLM produces a response with no tool calls.
+
+```
+START → [agent] ──── tool calls ────→ [tools]
+            ▲                              │
+            └──── [validate_results] ◄────┘
+```
+
+The `validate_results` node inspects the most recent tool output. If `search_documents` returned no results and the retry budget has not been exhausted, it injects a broadening hint into the message history and routes back to the agent — prompting it to reformulate the query with fewer or more general terms (up to `MAX_TOOL_RETRIES`, default: 2).
 
 ### Tools
 
-| Tool | What it does |
-|---|---|
-| `search_documents(query, top_k)` | Semantic search across all ingested chunks. Returns passages with source citations and similarity scores. |
-| `list_documents()` | Lists all ingested files with chunk counts. Useful for corpus navigation. |
-| `summarize_document(filename)` | Summarizes the full content of a specific document using all its chunks. |
-| `classify_document(filename)` | Identifies the banking document type — Promissory Note, Deed of Trust, HUD-1, TILA Disclosure, Form 1003, Appraisal Report, Closing Disclosure, etc. |
-| `calculate(expression)` | Evaluates financial expressions: monthly payment (PMT), APR, amortization, and basic arithmetic. Uses a safe evaluator — not `eval`. |
+| Tool | Signature | Purpose |
+|---|---|---|
+| `search_documents` | `(query: str, top_k: int = 5) → str` | Semantic search over all chunks; returns passages with source citations and similarity scores |
+| `list_documents` | `() → str` | Lists all ingested filenames with chunk counts |
+| `summarize_document` | `(filename: str) → str` | Summarizes the full content of a specific document using all its chunks |
+| `classify_document` | `(filename: str) → str` | Identifies the banking document type (Promissory Note, HUD-1, TILA Disclosure, Form 1003, Closing Disclosure, etc.) |
+| `calculate` | `(expression: str) → str` | Evaluates financial expressions: PMT(rate, nper, pv), APR calculations, and general arithmetic via a safe evaluator (not `eval`) |
 
 ### Grounding enforcement
 
-The agent is constrained by two layers:
+Two independent layers ensure the agent cannot return an ungrounded response:
 
-1. **System prompt rules** — five numbered mandatory grounding constraints
-   including a required `UNGROUNDED:` prefix format when no evidence is found.
-2. **Post-response check** in `runner.py` — verifies that at least one real
-   document filename appears in the response before returning it to the UI.
+1. **System prompt rules** — five numbered mandatory constraints, including a required `UNGROUNDED: I was unable to find information about [topic]` prefix format when no evidence is found after retrying.
 
-When the grounding check fails, the user receives:
+2. **Post-response check** (`runner.py`) — verifies that at least one known document filename appears in the response text before returning it to the caller. If the check fails, the response is replaced with a structured warning listing the available documents. Calculate-only turns are exempt from the filename requirement — these responses correctly derive their inputs from prior retrieved context.
+
+When the grounding check fails the user sees:
 
 ```
 ⚠️ I was unable to find relevant information about this question
 in the current document corpus.
 
 Documents available:
-• loan_application.pdf
-• lending_policy.pdf
-• mortgage_faq.md
-• loan_rates.csv
-• tila_disclosure.txt
+• fannie_mae_1003_loan_application.pdf
+• underwriting_guidelines.docx
+• ...
 
 If this topic is covered in another document, you can ingest it
 using the sidebar uploader.
 ```
+
+### Conversational memory
+
+Each API session maintains a `history: list[BaseMessage]` prepended to the LLM context on every turn. This allows the agent to answer follow-up questions that reference prior context without the user restating it — for example, "what about for 15 years instead?" after an initial payment calculation, or "what if their score is 720?" after a qualification analysis.
+
+### System components
+
+```
+Browser → Streamlit (ui/app.py)          :8501
+              │  HTTP (requests)
+              ▼
+         FastAPI (api/main.py)            :8000
+              │
+              ├── AgentRunner (singleton per process)
+              │       └── LangGraph StateGraph
+              ├── ChromaVectorStore (singleton)
+              └── EmbeddingProvider (singleton)
+
+MLflow (sqlite:///mlruns.db)             :5000
+ChromaDB (./chroma_db/)
+```
+
+---
+
+## Results
+
+All Q&A chains below were captured from live agent runs against the ingested corpus. Each chain is a single conversation session; turns are sequential and the agent carries context forward without the user restating prior information.
+
+---
+
+### Chain 1 — Document discovery → classify → summarize
+*Tools demonstrated: `list_documents`, `classify_document`, `summarize_document`*
+*Memory demonstrated: turn 3 omits the filename — agent recalls it from turn 2*
+
+**Turn 1: "What documents are in the knowledge base?"**
+
+> The knowledge base contains 9 documents across a variety of loan and banking-related file types:
+>
+> | # | Document | Type | Chunks |
+> |---|---|---|---|
+> | 1 | `fannie_mae_1003_loan_application.pdf` | PDF | 53 |
+> | 2 | `cfpb_closing_disclosure.pdf` | PDF | 33 |
+> | 3 | `cfpb_loan_estimate.pdf` | PDF | 13 |
+> | 4 | `hud1_settlement_statement.pdf` | PDF | 19 |
+> | 5 | `loan_products_catalog.json` | JSON | 24 |
+> | 6 | `mortgage_products_faq.md` | Markdown | 32 |
+> | 7 | `mortgage_rate_sheet.csv` | CSV | 14 |
+> | 8 | `tila_disclosure_statement.txt` | Text | 14 |
+> | 9 | `underwriting_guidelines.docx` | Word Doc | 25 |
+
+**Turn 2: "What type of document is the HUD-1 settlement statement?"**
+
+> `hud1_settlement_statement.pdf` is a **HUD-1 Settlement Statement**. Key identifiers: explicit "Settlement Statement (HUD-1)" title, OMB Approval No. 2502-0265, standard Sections J and K (borrower/seller transaction summaries), and RESPA-covered transaction disclosures. The HUD-1 itemizes all charges and credits to both buyer and seller at real estate closing.
+
+**Turn 3: "Summarize it."** *(no filename provided — agent recalled it from turn 2)*
+
+> The HUD-1 Settlement Statement (`hud1_settlement_statement.pdf`) is organized across three pages:
+> - **Page 1** — Transaction Summary: contract sales price, loan amounts, deposits, settlement charges, and cash due at closing for both borrower and seller.
+> - **Page 2** — Settlement Charges: itemized closing costs including origination fees, prepaid items, escrow reserves, title charges, and government recording fees, all totaled at Line 1400.
+> - **Page 3** — GFE Comparison & Loan Terms: compares Good Faith Estimate to actual HUD-1 charges by tolerance category, and outlines final loan terms.
+
+---
+
+### Chain 2 — Cross-doc retrieval → calculate → follow-up math
+*Tools demonstrated: `search_documents`, `calculate` (×2)*
+*Memory demonstrated: turns 2 and 3 reuse the APR and loan amount from prior turns with no re-statement*
+
+**Turn 1: "What is the APR on the TILA disclosure statement?"**
+
+> The APR stated in the TILA Disclosure Statement is **7.284%** — distinct from the nominal interest rate of **7.125%**. The APR is higher because it incorporates prepaid finance charges of $18,159.03.
+>
+> | Field | Value |
+> |---|---|
+> | APR | 7.284% |
+> | Interest Rate | 7.125% |
+> | Amount Financed | $285,000.00 |
+> | Finance Charge | $363,881.00 |
+> | Total of Payments | $648,881.00 |
+>
+> *Source: `tila_disclosure_statement.txt`*
+
+**Turn 2: "What would the monthly payment be on a $300,000 loan at that rate for 30 years?"** *(agent reused the 7.284% APR from turn 1)*
+
+> Using M = P × [r(1+r)ⁿ] / [(1+r)ⁿ - 1] where r = 0.07284 ÷ 12:
+>
+> | Loan Amount | APR | Term | Monthly Payment |
+> |---|---|---|---|
+> | $300,000 | 7.284% | 30 years | **$2,053.45** |
+
+**Turn 3: "How much total interest would I pay versus a 15-year term?"** *(agent reused loan amount and rate — neither re-stated)*
+
+> | | 30-Year | 15-Year |
+> |---|---|---|
+> | Monthly Payment | $2,053.45 | $2,744.34 |
+> | Total Payments | $739,242.64 | $494,181.46 |
+> | Total Interest | $439,242.64 | $193,981.46 |
+>
+> The 15-year term saves **$245,261** in interest at a cost of **$690.89/month** more.
+
+---
+
+### Chain 3 — Multi-doc qualification + rate lookup
+*Tools demonstrated: `search_documents` ×2 (underwriting guidelines + rate sheet)*
+*Memory demonstrated: turn 2 changes one variable without restating the full loan scenario*
+
+**Turn 1: "Would a borrower with a 660 credit score and 85% LTV qualify for a conventional loan, and what rate would they get?"**
+
+> - **Credit (660):** ✅ Meets 620 minimum. ⚠️ Below 680 — additional DTI restrictions apply. *(mortgage_products_faq.md)*
+> - **LTV (85%):** ✅ Within limits (conventional allows up to 95–97%). *(mortgage_rate_sheet.csv)*
+> - **PMI:** ⚠️ Required (LTV > 80%). Expect higher premium at sub-680 score; cancels at 78% LTV. *(underwriting_guidelines.docx)*
+> - **Rates (2025-01-15):** 20-Year Fixed 6.875% / 15-Year Fixed 6.500% / 7/1 ARM 6.500% / 5/1 ARM 6.250%. A full LLPA grid for the 660/85% combination was not found — the underwriter would apply the full pricing matrix for the exact rate add-on.
+
+**Turn 2: "What if their score is 720 instead — does anything change?"** *(agent reused 85% LTV conventional scenario from turn 1)*
+
+> | Factor | 660 Score | 720 Score |
+> |---|---|---|
+> | Below-680 DTI restriction | ⚠️ Yes | ✅ Lifted |
+> | Qualifies as compensating factor | ❌ No | ✅ Yes (720+ with clean 24-mo history) |
+> | PMI at 85% LTV | ⚠️ Yes — higher premium | ⚠️ Yes — lower premium |
+> | Jumbo products available | ❌ No | ✅ Yes (above $1.5M) |
+>
+> *Sources: `mortgage_products_faq.md`, `underwriting_guidelines.docx`, `mortgage_rate_sheet.csv`*
+
+---
+
+### Chain 4 — FHA deep dive + MIP calculation
+*Tools demonstrated: `search_documents` ×3 (multi-doc), `calculate`*
+*Memory demonstrated: turn 2 reuses the 0.55% MIP rate extracted in turn 1*
+
+**Turn 1: "Does an FHA loan require PMI, and what are the DTI limits if I have strong compensating factors?"**
+
+> FHA does **not** use PMI — it uses **Mortgage Insurance Premium (MIP)**:
+>
+> | Component | Details |
+> |---|---|
+> | Upfront MIP (UFMIP) | 1.75% of loan amount at closing |
+> | Annual MIP | 0.55% per year |
+> | Duration | Life of the loan (LTV > 90%) |
+> | Cancelable? | No — only by refinancing |
+>
+> FHA mortgage insurance is required regardless of LTV, unlike conventional PMI which cancels at 80%.
+>
+> **DTI limits:**
+>
+> | | Standard | With AUS Approve + Compensating Factors |
+> |---|---|---|
+> | Front-End | 31% | Up to 57% |
+> | Back-End | 43% | Up to 57% |
+>
+> Qualifying compensating factors: 12+ months cash reserves (PITIA), residual income exceeding VA tables by 20%+, minimal payment shock.
+>
+> *Sources: `mortgage_products_faq.md`, `loan_products_catalog.json`, `underwriting_guidelines.docx`*
+
+**Turn 2: "What would the monthly MIP cost on a $285,000 FHA loan?"** *(agent reused 0.55% annual MIP rate from turn 1)*
+
+> | Item | Calculation | Amount |
+> |---|---|---|
+> | Upfront MIP (UFMIP) | $285,000 × 1.75% | **$4,987.50** (typically financed in) |
+> | Annual MIP | $285,000 × 0.55% | $1,567.50/year |
+> | **Monthly MIP** | $1,567.50 ÷ 12 | **$130.63/month** |
+
+---
+
+### Chain 5 — Cross-document cost comparison
+*Tools demonstrated: `search_documents` ×2 (two separate PDFs in one query)*
+
+**Turn 1: "How did the estimated closing costs on the loan estimate compare to the final closing disclosure?"**
+
+> | Item | Loan Estimate | Closing Disclosure | Change |
+> |---|---|---|---|
+> | Total Closing Costs (J) | $8,054.00 | $9,712.10 | +$1,658.10 |
+> | Seller Credits | $0 | –$2,500.00 | Added |
+> | Adjustments & Other Credits | $0 | –$1,035.04 | Added |
+> | **Cash to Close** | **$16,054.00** | **$14,147.26** | **–$1,906.74** |
+>
+> Although total closing costs increased by $1,658, cash to close fell by $1,907 — driven by $2,500 in seller credits and $1,035 in adjustments not present on the Loan Estimate.
+>
+> *Sources: `cfpb_loan_estimate.pdf`, `cfpb_closing_disclosure.pdf`*
+
+---
+
+### Chain 6 — Grounding boundary and recovery
+*Demonstrates: two-layer grounding enforcement on an unanswerable question; clean recovery on the next turn*
+
+**Turn 1: "What were Meridian Bank's Q3 earnings and return on equity?"**
+
+> ⚠️ I was unable to find information about [Meridian Bank's Q3 earnings and return on equity] in the available documents.
+>
+> The documents in the knowledge base are focused on mortgage and lending operations — underwriting guidelines, product FAQs, TILA disclosures, and loan applications. None contain quarterly financial performance data such as earnings or ROE.
+>
+> To find this information, upload Meridian Bank's quarterly earnings report or consult SEC filings (10-Q) directly.
+>
+> Documents available: `fannie_mae_1003_loan_application.pdf`, `cfpb_closing_disclosure.pdf`, `cfpb_loan_estimate.pdf`, `hud1_settlement_statement.pdf`, `loan_products_catalog.json`, `mortgage_products_faq.md`, `mortgage_rate_sheet.csv`, `tila_disclosure_statement.txt`, `underwriting_guidelines.docx`
+
+**Turn 2: "What documents would I need to provide to apply for a loan?"** *(pivot to an answerable question — agent recovers immediately)*
+
+> 1. **Personal Information** — Full legal name, SSN or ITIN, date of birth *(fannie_mae_1003_loan_application.pdf, p. 1)*
+> 2. **Employment & Income** — 2 years employment history, gross monthly income; if self-employed: business docs and P&L *(fannie_mae_1003_loan_application.pdf, p. 2)*
+> 3. **Supporting Financial Documents** — Pay stubs (2 years), tax returns (2 years, signed), 2–3 months bank statements *(mortgage_products_faq.md, p. 135)*
+> 4. **Property Information** — Details on all currently owned properties *(fannie_mae_1003_loan_application.pdf, p. 4)*
+> 5. **Assets & Liabilities** — All owned assets and outstanding debts *(fannie_mae_1003_loan_application.pdf, p. 2)*
+> 6. **Residency Documentation** — Permanent Resident Card (I-551) or EAD if applicable *(underwriting_guidelines.docx, p. 7)*
 
 ---
 
@@ -158,9 +404,7 @@ brew install tesseract poppler
 sudo apt-get install tesseract-ocr poppler-utils
 ```
 
-OCR is optional — if Tesseract is not installed, the PDF parser falls back to
-`pypdf` text extraction and logs a warning. Digitally-created PDFs (the majority
-of banking documents) do not require OCR.
+OCR is optional — the PDF parser falls back to `pypdf` text extraction if Tesseract is not installed. Digitally-created PDFs do not require OCR.
 
 ### Install
 
@@ -168,11 +412,9 @@ of banking documents) do not require OCR.
 git clone https://github.com/jgalloway42/doc-qa-agent.git
 cd doc-qa-agent
 
-# Create and activate a virtual environment
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Install the package with dev dependencies
 make install
 ```
 
@@ -185,7 +427,6 @@ cp .env.example .env
 Edit `.env` and set at minimum:
 
 ```bash
-# Choose your LLM provider
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 
@@ -193,7 +434,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 EMBEDDING_PROVIDER=sentence_transformers
 ```
 
-See [Configuration](#configuration) for all options.
+See [`.env.example`](.env.example) for all options with full documentation.
 
 ### Ingest the sample corpus
 
@@ -201,89 +442,68 @@ See [Configuration](#configuration) for all options.
 make ingest
 ```
 
-This ingests all documents in `docs/` — nine banking documents covering loan
-applications, closing disclosures, loan estimates, settlement statements,
-underwriting guidelines, rate sheets, product catalog, FAQ, and a TILA disclosure.
-Duplicate files are skipped automatically (SHA-256 hash check).
+This ingests all nine documents in `docs/`. Duplicate files are skipped automatically (SHA-256 hash check).
 
-### Start the API + UI
-
-Two terminals:
+### Start the services
 
 ```bash
-# Terminal 1: FastAPI backend on :8000
+# Terminal 1 — FastAPI backend
 make api
 
-# Terminal 2: Streamlit frontend on :8501
+# Terminal 2 — Streamlit frontend
 make ui
-```
 
-Open [http://localhost:8501](http://localhost:8501).
-
-### Start MLflow (optional, recommended)
-
-In a third terminal:
-
-```bash
+# Terminal 3 — MLflow UI (optional)
 make mlflow
 ```
 
-Open [http://localhost:5000](http://localhost:5000) to view ingestion runs and
-agent session traces. All tabs (Overview, Experiments, Traces) are fully functional
-because MLflow is backed by SQLite.
+| Service | URL |
+|---|---|
+| Streamlit UI | http://localhost:8501 |
+| FastAPI + Swagger | http://localhost:8000/docs |
+| MLflow | http://localhost:5000 |
 
 ---
 
 ## API Reference
 
-The FastAPI backend exposes a REST API at `http://localhost:8000`. Interactive docs
-are available at [http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI).
-
 | Method | Path | Description |
-|--------|------|-------------|
+|---|---|---|
 | `GET` | `/health` | Liveness check → `{"status": "ok"}` |
 | `GET` | `/status` | Corpus stats + provider settings |
 | `POST` | `/sessions` | Create a new chat session → `{session_id, mlflow_run_id}` |
 | `POST` | `/sessions/{id}/chat` | Send a message → `{response, session_id}` |
 | `GET` | `/sessions/{id}` | Retrieve session message history |
 | `GET` | `/documents` | List all ingested documents with chunk counts |
-| `POST` | `/documents/ingest` | Upload and ingest a file (multipart form) → `IngestResponse` |
+| `POST` | `/documents/ingest` | Upload and ingest a file (multipart) → `IngestResponse` |
+
+Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ---
 
 ## Configuration
 
-All configuration is managed via environment variables loaded from `.env`.
-The full reference is in `.env.example`. Key settings:
+All settings are environment variables loaded from `.env`. Full documentation is in [`.env.example`](.env.example).
 
 | Variable | Default | Description |
 |---|---|---|
 | `LLM_PROVIDER` | `anthropic` | `anthropic`, `openai`, or `ollama` |
 | `ANTHROPIC_API_KEY` | — | Required if `LLM_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | — | Required if `LLM_PROVIDER=openai` or `EMBEDDING_PROVIDER=openai` |
-| `OLLAMA_MODEL` | `llama3.2` | Model name when `LLM_PROVIDER=ollama` |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `EMBEDDING_PROVIDER` | `sentence_transformers` | `sentence_transformers` (local) or `openai` |
-| `SENTENCE_TRANSFORMERS_MODEL` | `all-MiniLM-L6-v2` | Model name for local embeddings |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | ChromaDB storage directory |
-| `CHUNK_SIZE` | `512` | Characters per chunk (approximate) |
+| `CHUNK_SIZE` | `512` | Characters per chunk |
 | `CHUNK_OVERLAP` | `64` | Overlap between consecutive chunks |
-| `PDF_OCR_THRESHOLD` | `50` | Mean chars/page below which OCR is triggered. Set to `0` to disable OCR fallback. |
-| `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` | MLflow backend. SQLite required for MLflow 3.x GenAI UI. Swap to `s3://bucket/mlruns.db` for AWS. |
-| `DEFAULT_TOP_K` | `5` | Number of chunks returned per search |
+| `PDF_OCR_THRESHOLD` | `50` | Mean chars/page below which OCR is triggered; `0` disables OCR |
+| `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` | MLflow backend — SQLite required for MLflow 3.x GenAI UI |
+| `DEFAULT_TOP_K` | `5` | Chunks returned per search |
 | `MAX_TOOL_RETRIES` | `2` | Max automatic search retries per agent turn |
-| `API_BASE_URL` | `http://localhost:8000` | FastAPI backend URL (used by Streamlit) |
 
-> **Important:** Once documents are ingested with a given `EMBEDDING_PROVIDER`,
-> the corpus cannot be queried with a different provider — the vector spaces are
-> incompatible. To switch providers, run `make clean` and re-ingest.
+> **Note:** Once documents are ingested with a given `EMBEDDING_PROVIDER`, the corpus cannot be queried with a different provider. Run `make clean` and re-ingest to switch.
 
 ---
 
 ## Running with Docker
-
-Docker Compose runs three services: the FastAPI backend, the Streamlit frontend,
-and a local MLflow tracking server:
 
 ```bash
 cp .env.example .env
@@ -298,14 +518,7 @@ docker-compose up
 | FastAPI backend | http://localhost:8000 |
 | MLflow UI | http://localhost:5000 |
 
-Data is persisted in `./chroma_db/` and `./mlflow_data/` via volume mounts — it
-survives container restarts.
-
-To rebuild after code changes:
-
-```bash
-docker-compose up --build
-```
+Data is persisted in `./chroma_db/` and `./mlflow_data/` via volume mounts. To rebuild after code changes: `docker-compose up --build`.
 
 ---
 
@@ -325,8 +538,6 @@ make api          # start FastAPI on :8000 (with --reload)
 make ui           # start Streamlit on :8501
 make mlflow       # start MLflow UI on :5000
 make clean        # remove chroma_db/, mlruns.db, caches
-make docker-build # build Docker image
-make docker-up    # docker-compose up
 ```
 
 ### Running tests
@@ -335,45 +546,7 @@ make docker-up    # docker-compose up
 make test
 ```
 
-Tests run against a real in-memory ChromaDB instance (`EphemeralClient`) — not
-a mock. LLM calls are mocked with deterministic `AIMessage` responses. The 80%
-coverage gate is enforced; `ui/`, `cli/`, and `api/` are excluded from measurement.
-
-```bash
-# View HTML coverage report
-make test-cov
-open htmlcov/index.html
-```
-
-### Adding a new document
-
-```bash
-# Single file
-python -m cli.ingest_cli ingest path/to/document.pdf
-
-# Directory
-python -m cli.ingest_cli ingest path/to/docs/
-
-# Force re-ingest (ignore duplicate check)
-python -m cli.ingest_cli ingest path/to/document.pdf --force
-
-# List ingested documents
-python -m cli.ingest_cli list
-
-# System status
-python -m cli.ingest_cli status
-```
-
-### Supported file types
-
-| Extension | Parser | Notes |
-|---|---|---|
-| `.pdf` | `pypdf` + `pytesseract` fallback | Two-pass: digital extraction first, OCR if sparse |
-| `.txt` | stdlib | Line-by-line with line number provenance |
-| `.md` | stdlib | Line-by-line, heading markers preserved |
-| `.csv` | `csv.DictReader` | Each row serialized as JSON |
-| `.json` | `json` stdlib | Root list → one entry per element; root dict → one entry per key |
-| `.docx` | `python-docx` | Paragraphs + table rows; empty paragraphs skipped |
+Tests run against a real in-memory ChromaDB instance — not a mock. LLM calls are mocked with deterministic `AIMessage` responses. The 80% coverage gate is enforced; `ui/`, `cli/`, and `api/` are excluded from measurement. Current coverage: **90%** across 118 tests.
 
 ### Project structure
 
@@ -381,17 +554,17 @@ python -m cli.ingest_cli status
 doc-qa-agent/
 ├── .github/workflows/ci.yml   # GitHub Actions: lint → type-check → test
 ├── api/
-│   ├── __init__.py
 │   ├── dependencies.py         # Singleton lifecycle + in-memory session store
-│   ├── main.py                 # FastAPI app + all route handlers
+│   ├── main.py                 # FastAPI routes
 │   └── models.py               # Pydantic request/response schemas
+├── assets/                     # Static assets (screenshots, diagrams)
 ├── cli/ingest_cli.py           # Typer CLI for ingestion
 ├── config/settings.py          # Pydantic-settings BaseSettings
 ├── doc_qa/
-│   ├── embeddings.py           # EmbeddingProvider ABC + providers
+│   ├── embeddings.py           # EmbeddingProvider ABC + implementations
 │   ├── observability.py        # MLflow helpers
 │   ├── ingestion/
-│   │   ├── parsers.py          # File-type parsers
+│   │   ├── parsers.py          # File-type parsers (PDF, DOCX, MD, TXT, CSV, JSON)
 │   │   ├── chunker.py          # Sliding window chunker
 │   │   ├── dedup.py            # SHA-256 duplicate detection
 │   │   └── pipeline.py         # Ingestion orchestration
@@ -402,309 +575,130 @@ doc-qa-agent/
 │       ├── tools.py            # 5 LangGraph tools
 │       ├── graph.py            # StateGraph + validate_tool_results node
 │       └── runner.py           # Session memory + grounding check
-├── ui/app.py                   # Streamlit frontend (HTTP client only)
-├── tests/                      # pytest suite (80% coverage gate)
-├── docs/                       # Sample banking document corpus
+├── docs/                       # Sample banking document corpus (9 files, 6 types)
+├── ui/app.py                   # Streamlit frontend (thin HTTP client)
+├── tests/                      # pytest suite (90% coverage, 118 tests)
 ├── Dockerfile
 ├── docker-compose.yml
 └── pyproject.toml
 ```
 
----
+### Module boundaries
 
-## Document Corpus
-
-The `docs/` directory contains nine banking documents across six file types. They are
-designed to require cross-document retrieval — most interesting questions cannot be
-answered from a single document. All fictional documents use **Meridian Bank of
-Springfield, N.A.** as the issuing institution. No real PII is present in any document.
-
-### Documents
-
-#### Downloaded from public government sources
-
-| Filename | Type | Source | Document class |
-|---|---|---|---|
-| `fannie_mae_1003_loan_application.pdf` | PDF | Fannie Mae / FHFA | Uniform Residential Loan Application (Form 1003) — filled sample showing borrower info, employment, assets, liabilities, and loan details across 8 pages |
-| `cfpb_closing_disclosure.pdf` | PDF | CFPB (consumerfinance.gov) | Closing Disclosure (TRID) — 5-page completed form showing final loan terms, projected payments, itemized closing costs, and cash to close |
-| `cfpb_loan_estimate.pdf` | PDF | CFPB (consumerfinance.gov) | Loan Estimate (TRID) — 3-page completed form showing estimated rate, payment, and closing costs; pairs with the Closing Disclosure for comparison questions |
-
-To download these files:
-```bash
-# Fannie Mae Form 1003 (filled sample)
-curl -L "https://singlefamily.fanniemae.com/media/7991/display" -o docs/fannie_mae_1003_loan_application.pdf
-
-# CFPB Closing Disclosure (filled sample)
-curl -L "https://files.consumerfinance.gov/f/201311_cfpb_kbyo_closing-disclosure.pdf" -o docs/cfpb_closing_disclosure.pdf
-
-# CFPB Loan Estimate (filled sample)
-curl -L "https://files.consumerfinance.gov/f/201311_cfpb_kbyo_loan-estimate.pdf" -o docs/cfpb_loan_estimate.pdf
-```
-
-#### Created for this project (fictional, no real PII)
-
-| Filename | Type | Contents |
+| Layer | Module | Must NOT import |
 |---|---|---|
-| `underwriting_guidelines.docx` | DOCX | 9-section internal bank policy covering borrower eligibility, credit score minimums by product (see table below), DTI limits, LTV maximums, PMI rules, reserve requirements, the exception approval hierarchy, and appraisal requirements |
-| `mortgage_products_faq.md` | Markdown | 30 Q&A pairs across 7 topic areas: mortgage types, loan types (conforming/jumbo/FHA/VA/USDA), qualification criteria, PMI, escrow, closing costs, and refinancing |
-| `mortgage_rate_sheet.csv` | CSV | 18 rows of current product rates with columns: `product`, `loan_type`, `term_months`, `rate_pct`, `apr_pct`, `points`, `min_credit_score`, `max_ltv_pct`, `max_dti_pct`, `requires_pmi_above_80_ltv`, `effective_date`, `notes` |
-| `tila_disclosure_statement.txt` | TXT | Complete Truth in Lending Act disclosure for a fictional $285,000 30-year fixed mortgage — APR, finance charge, amount financed, total of payments, payment schedule, late charge terms, prepayment clause, and assumption clause |
-| `loan_products_catalog.json` | JSON | Array of 10 loan product objects with full qualification data per product: credit score minimums, max LTV/DTI, PMI rules, MIP/funding fee details, eligible property types, eligible occupancy types, and reserve requirements |
-| `hud1_settlement_statement.pdf` | PDF | HUD-1 Settlement Statement (fictional) — itemized closing costs, loan charges, settlement charges, prorations, and cash to close |
-
-### Cross-document query map
-
-The corpus is deliberately structured so that the most useful questions require
-retrieving from multiple documents. The table below shows which documents each
-query type touches — this is what makes the demo compelling.
-
-| Question type | Documents required | Tools called |
-|---|---|---|
-| "Would a borrower with a 660 credit score and 85% LTV qualify for a conventional loan, and what rate would they get?" | `underwriting_guidelines.docx` + `mortgage_rate_sheet.csv` | `search_documents` (×2) |
-| "How did the closing costs change between the loan estimate and the closing disclosure?" | `cfpb_loan_estimate.pdf` + `cfpb_closing_disclosure.pdf` | `search_documents` (×2) |
-| "What is the monthly payment on the loan in the closing disclosure, and how much total interest will be paid?" | `cfpb_closing_disclosure.pdf` | `search_documents` + `calculate` |
-| "What type of document is the Form 1003 and what sections does it contain?" | `fannie_mae_1003_loan_application.pdf` | `classify_document` + `summarize_document` |
-| "Does an FHA loan require PMI, and what are the DTI limits if I have strong compensating factors?" | `loan_products_catalog.json` + `underwriting_guidelines.docx` + `mortgage_products_faq.md` | `search_documents` (×3) |
-| "What is the APR on the TILA disclosure, and what would the monthly payment be on a $300,000 loan at the same rate?" | `tila_disclosure_statement.txt` | `search_documents` + `calculate` |
-
----
-
-## Sample Q&A
-
-The following examples demonstrate multi-step agent reasoning across the sample
-corpus. Each shows which tools the agent calls.
-
----
-
-**Q: What credit score is required for a 30-year fixed mortgage, and what rate would I get today?**
-
-> Tools called: `search_documents` (underwriting_guidelines.docx) → `search_documents` (mortgage_rate_sheet.csv)
-
-> A: According to the Meridian Bank of Springfield Underwriting Guidelines
-> (underwriting_guidelines.docx, section 2), the minimum credit score for a conforming
-> 30-year fixed mortgage is 620. Borrowers with scores below 680 are subject
-> to additional compensating factor requirements. Per the current rate sheet
-> (mortgage_rate_sheet.csv), the 30-year fixed conforming rate is 7.125%
-> with an APR of 7.284% and 0.5 points.
-
----
-
-**Q: What type of document is tila_disclosure_statement.txt?**
-
-> Tools called: `classify_document` (tila_disclosure_statement.txt)
-
-> A: `tila_disclosure_statement.txt` is a **Truth in Lending Act (TILA) Disclosure
-> Statement**, also known as a Reg Z disclosure. This is a federally mandated
-> form under 15 U.S.C. § 1601 that discloses the APR, finance charge, amount
-> financed, total of payments, and payment schedule to the borrower prior to
-> loan consummation.
-
----
-
-**Q: What would the monthly payment be on a $250,000 loan at 6.5% for 30 years?**
-
-> Tools called: `calculate` (PMT formula)
-
-> A: Using the standard annuity formula PMT(r, n, PV):
-> - Monthly rate: 6.5% / 12 = 0.5417%
-> - Term: 360 payments
-> - Principal: $250,000
->
-> **Monthly payment: $1,580.17**
->
-> Total of payments over 30 years: $568,861.20
-> Total interest paid: $318,861.20
-
----
-
-**Q: What about for 15 years instead?** *(follow-up — no loan amount repeated)*
-
-> Tools called: `calculate` (PMT formula, reusing context from previous turn)
-
-> A: For the same $250,000 at 6.5% over 15 years (180 payments):
->
-> **Monthly payment: $2,178.25**
->
-> Total of payments: $392,085.00
-> Total interest paid: $142,085.00 — a saving of $176,776.20 versus the
-> 30-year term, at a cost of $598.08 more per month.
-
----
-
-**Q: Summarize the mortgage FAQ document.**
-
-> Tools called: `list_documents` → `summarize_document` (mortgage_products_faq.md)
-
-> A: The mortgage FAQ (mortgage_products_faq.md) covers seven main areas:
-> mortgage types, loan types, qualification criteria, PMI, escrow, closing costs,
-> and refinancing.
+| Configuration | `config/settings.py` | Any `doc_qa` module |
+| Storage abstraction | `doc_qa/store/base.py` | Any concrete store |
+| Ingestion | `doc_qa/ingestion/` | `agent`, `ui`, `api` |
+| Agent | `doc_qa/agent/` | `ui`, `ingestion`, `api` |
+| API | `api/` | `graph.py`, `store` directly |
+| UI | `ui/app.py` | Everything except `config/settings.py` and `requests` |
 
 ---
 
 ## Observability
 
-MLflow tracks two categories of runs under the `doc-qa-agent` experiment.
-MLflow 3.x requires a SQL backend for the GenAI-oriented UI — this project
-uses `sqlite:///mlruns.db` by default, which enables all tabs including
-Overview, Experiments, and Traces.
+MLflow tracks two categories of runs under the `doc-qa-agent` experiment (start with `make mlflow`).
 
 ### Ingestion runs
 
-Each file ingestion creates one MLflow run with:
+Each file ingestion creates one MLflow run named `ingest:<filename>`:
 
 | Signal | Type | Example |
 |---|---|---|
-| `chunks_created` | Metric | `42` |
+| `chunks_created` | Metric | `25` |
 | `embedding_time_s` | Metric | `1.34` |
 | `total_time_s` | Metric | `1.61` |
-| `skipped` | Param | `False` (not duplicate) |
-| `filename` | Param | `loan_application.pdf` |
-| `file_hash` | Param | `a3f2...` |
+| `filename` | Param | `underwriting_guidelines.docx` |
+| `skipped` | Param | `False` |
 | `embedding_provider` | Param | `sentence_transformers` |
-| `chunk_size` | Param | `512` |
-| `chunk_overlap` | Param | `64` |
 
 ### Agent session runs
 
-Each conversation session creates one MLflow run. Per-turn metrics are logged
-with `step=turn_index`:
+Each conversation session creates one MLflow parent run named `session:<id[:8]>`. Per-turn metrics are logged with `step=turn_index`:
 
 | Signal | Type | What it tells you |
 |---|---|---|
-| `latency_s` | Metric (per step) | Agent response time per turn |
-| `grounded` | Metric (per step) | `1.0` = grounded, `0.0` = ungrounded response |
-| `retrieval_score_mean` | Metric (per step) | Mean cosine similarity of top-k results |
-| `retrieval_score_max` | Metric (per step) | Best matching chunk score |
-| `retrieval_score_min` | Metric (per step) | Weakest matching chunk score |
+| `latency_s` | Metric (per step) | Agent response time |
+| `grounded` | Metric (per step) | `1.0` = grounded, `0.0` = ungrounded |
 | `tool_calls` | Param (per step) | e.g., `search_documents,calculate` |
-| `tool_result_N` | Param (per step) | Content returned by the Nth tool call, truncated to 500 chars |
+| `tool_result_N` | Param (per step) | Content returned by the Nth tool call (truncated to 500 chars) |
 | `user_message` | Param (per step) | Truncated to 500 chars |
-
-The `grounded` metric is queryable as a time-series across sessions — use it
-to track grounding rate over time and detect regressions when new documents
-are added to the corpus.
+| `response_preview` | Param (per step) | Truncated to 500 chars |
 
 ---
 
 ## Known Limitations
 
-**Grounding check is heuristic-based.** The post-response grounding check
-verifies that at least one real document filename appears in the response.
-It does not verify that the cited content is accurate or that specific
-page numbers are correct. A response that includes a filename in a fabricated
-citation would pass the check. A semantic grounding verifier (LLM-as-judge or
-embedding similarity) is the correct v2 solution.
+**Grounding check is heuristic-based.** The post-response check verifies that a real document filename appears in the response — it does not verify that cited content is accurate or that page numbers are correct. A semantic grounding verifier (LLM-as-judge) is the correct v2 solution.
 
-**Embedding provider is fixed at ingestion time.** The vector space produced
-by `sentence-transformers` and OpenAI embeddings is incompatible. Switching
-`EMBEDDING_PROVIDER` after ingesting documents requires clearing the vector
-store (`make clean`) and re-ingesting the full corpus.
+**Embedding provider is fixed at ingestion time.** Switching `EMBEDDING_PROVIDER` after ingesting documents requires `make clean` and full re-ingestion.
 
-**Synchronous ingestion blocks the API.** Ingesting a large document through
-the Streamlit uploader (which calls `POST /documents/ingest`) blocks the uvicorn
-worker thread during processing. For documents larger than ~50 pages, use the
-CLI (`python -m cli.ingest_cli ingest`) instead, or run uvicorn with multiple
-workers and wrap ingestion in `asyncio.run_in_executor`.
+**Synchronous ingestion blocks the API.** Large documents ingested via the Streamlit uploader block the uvicorn worker thread. For documents larger than ~50 pages, use the CLI or wrap ingestion in `asyncio.run_in_executor`.
 
-**No authentication.** The API and Streamlit UI have no login or session isolation.
-All users share the same document corpus. Authentication is required before
-any production deployment.
+**No authentication.** The API and UI have no login or session isolation. All users share the same document corpus. Authentication is required before any production deployment.
 
-**Single-process ChromaDB.** ChromaDB's `PersistentClient` is not safe for
-concurrent writes from multiple processes. Multi-worker deployments require
-ChromaDB's HTTP server mode or a Snowflake Cortex / pgvector migration.
+**In-memory session store.** Agent sessions are stored in a Python dict in `api/dependencies.py`. Sessions are lost on API restart. Replace with a Redis or database-backed session store for persistence.
 
-**In-memory session store.** Agent sessions are stored in a Python dict in
-`api/dependencies.py`. Sessions are lost on API restart. For persistence,
-replace the dict with a Redis or database-backed session store.
+**Single-process ChromaDB.** `PersistentClient` is not safe for concurrent writes from multiple processes. Multi-worker deployments require ChromaDB's HTTP server mode or a migration to pgvector/Snowflake Cortex.
 
 ---
 
 ## Production Migration
 
-### Migrating to Snowflake Cortex
+### Migrating the vector store (e.g., to Snowflake Cortex)
 
-The `VectorStore` abstract base class (`doc_qa/store/base.py`) is the migration
-seam. Implementing Snowflake Cortex support requires one new file:
+The `VectorStore` abstract base class (`doc_qa/store/base.py`) is the migration seam. A new backend requires one new file implementing the ABC — no changes to the agent, ingestion pipeline, tools, or tests.
 
 ```python
 # doc_qa/store/snowflake_cortex.py
 from doc_qa.store.base import VectorStore, Chunk, SearchResult
 
 class SnowflakeCortexVectorStore(VectorStore):
-    def __init__(self, connection, table_name: str): ...
-
     def add_chunks(self, chunks, embeddings): ...
-    # → INSERT INTO {table_name} (id, text, filename, ..., embedding)
-    #   VALUES (..., ARRAY_CONSTRUCT(...))
+    # → INSERT INTO table (id, text, filename, ..., embedding) VALUES (...)
 
-    def search(self, query_embedding, top_k=5):  ...
-    # → SELECT *, VECTOR_COSINE_SIMILARITY(embedding, ARRAY_CONSTRUCT(...))
-    #   AS score FROM {table_name} ORDER BY score DESC LIMIT {top_k}
-
-    def get_chunk(self, chunk_id): ...
-    def list_documents(self): ...
-    def get_chunks_for_document(self, filename): ...
-    def document_exists(self, filename): ...
-    def count(self): ...
+    def search(self, query_embedding, top_k=5): ...
+    # → SELECT *, VECTOR_COSINE_SIMILARITY(embedding, ARRAY_CONSTRUCT(...)) AS score
+    #   FROM table ORDER BY score DESC LIMIT top_k
 ```
 
-Then pass the store to the FastAPI dependencies in `api/dependencies.py`:
-
-```python
-_store = SnowflakeCortexVectorStore(snowflake_connection, table_name="doc_qa_chunks")
-```
-
-No changes to the agent, ingestion pipeline, tools, or tests are required.
+Then swap in `api/dependencies.py`: `_store = SnowflakeCortexVectorStore(...)`.
 
 ### Migrating MLflow to AWS S3
 
-Zero code changes required. Update one environment variable:
+Zero code changes — update one variable:
 
 ```bash
 MLFLOW_TRACKING_URI=s3://your-bucket/mlruns.db
 ```
 
-Ensure the application's IAM role has `s3:GetObject`, `s3:PutObject`, and
-`s3:ListBucket` on the target bucket.
-
 ### Recommended production additions
 
 | Capability | Approach |
 |---|---|
-| Authentication | OAuth2/SAML SSO via FastAPI middleware, or add Auth0/Cognito to the API |
-| Multi-user sessions | Replace in-memory `_sessions` dict in `api/dependencies.py` with Redis or PostgreSQL |
-| FastAPI scaling | Add `--workers N` to uvicorn, or deploy behind Gunicorn with uvicorn workers |
-| Async ingestion | Wrap `ingest_file` in `asyncio.run_in_executor` or use Celery/SQS for background processing |
-| Re-ranking | Add `cross-encoder/ms-marco-MiniLM-L-6-v2` as a re-ranking pass after retrieval |
-| Semantic grounding | LLM-as-judge grounding verification (opt-in via `STRICT_GROUNDING=true`) |
-| SBOM generation | Add `pip-licenses` to CI, output `THIRD_PARTY_LICENSES.md` as artifact |
-| Concurrent writes | Migrate to ChromaDB HTTP server mode or Snowflake Cortex |
+| Authentication | OAuth2/SAML via FastAPI middleware or Auth0/Cognito |
+| Multi-user sessions | Replace in-memory `_sessions` dict with Redis |
+| Async ingestion | Celery/SQS for background processing |
+| Re-ranking | `cross-encoder/ms-marco-MiniLM-L-6-v2` post-retrieval pass |
+| Semantic grounding | LLM-as-judge verification (opt-in via `STRICT_GROUNDING=true`) |
+| Concurrent writes | ChromaDB HTTP server mode or pgvector |
 
 ---
 
 ## License
 
-This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE) for details.
 
-All runtime dependencies are MIT, Apache 2.0, or BSD 3-Clause licensed.
-No GPL or LGPL dependencies. Full license inventory:
+All runtime dependencies are MIT, Apache 2.0, or BSD 3-Clause licensed. No GPL or LGPL dependencies.
 
 | Package | License |
 |---|---|
 | langchain / langgraph | MIT |
 | chromadb | Apache 2.0 |
 | mlflow | Apache 2.0 |
-| fastapi | MIT |
-| uvicorn | BSD 3-Clause |
-| httpx | BSD 3-Clause |
-| requests | Apache 2.0 |
+| fastapi / uvicorn | MIT / BSD 3-Clause |
 | streamlit | Apache 2.0 |
 | sentence-transformers | Apache 2.0 |
-| pypdf | BSD 3-Clause |
-| pdf2image / pytesseract | MIT / Apache 2.0 |
-| Tesseract OCR | Apache 2.0 |
-| python-docx | MIT |
 | pydantic / pydantic-settings | MIT |
-| simpleeval | MIT |
-| typer / ruff / pytest | MIT |
+| typer | MIT |

@@ -99,8 +99,10 @@ class AgentRunner:
                 content = msg.content if isinstance(msg.content, str) else str(msg.content)
                 tool_results.append(content)
 
-        # Grounding check
-        grounded = self._check_grounded(response_text)
+        # Grounding check — skip filename requirement when only calculate was called,
+        # since those responses derive from prior retrieved context, not a new search.
+        calculate_only = bool(tool_call_names) and all(t == "calculate" for t in tool_call_names)
+        grounded = calculate_only or self._check_grounded(response_text)
         if not grounded:
             final_response = self._format_grounding_failure()
             log_grounded = False

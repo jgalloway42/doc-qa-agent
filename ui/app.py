@@ -56,33 +56,35 @@ with st.sidebar:
     # --- Ingest New File ---
     st.header("⬆️ Ingest New File")
     uploaded = st.file_uploader(
-        "Upload a document",
+        "Upload documents",
         type=["pdf", "txt", "md", "csv", "json", "docx"],
         label_visibility="collapsed",
+        accept_multiple_files=True,
     )
     if uploaded and st.button("Ingest", use_container_width=True):
-        suffix = Path(uploaded.name).suffix
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(uploaded.read())
-            tmp_path = Path(tmp.name)
-        with st.spinner(f"Ingesting {uploaded.name}…"), open(tmp_path, "rb") as fh:
-            resp = requests.post(
-                f"{API}/documents/ingest",
-                files={"file": (uploaded.name, fh)},
-                timeout=120,
-            )
-        tmp_path.unlink(missing_ok=True)
-        if resp.status_code == 200:
-            result = resp.json()
-            if result["skipped"]:
-                st.info(f"{uploaded.name}: already ingested (skipped).")
-            else:
-                st.success(
-                    f"{uploaded.name}: {result['chunks_created']} chunks added "
-                    f"in {result['total_time_s']:.1f}s."
+        for file in uploaded:
+            suffix = Path(file.name).suffix
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(file.read())
+                tmp_path = Path(tmp.name)
+            with st.spinner(f"Ingesting {file.name}…"), open(tmp_path, "rb") as fh:
+                resp = requests.post(
+                    f"{API}/documents/ingest",
+                    files={"file": (file.name, fh)},
+                    timeout=120,
                 )
-        else:
-            st.error(f"Ingest failed: {resp.text}")
+            tmp_path.unlink(missing_ok=True)
+            if resp.status_code == 200:
+                result = resp.json()
+                if result["skipped"]:
+                    st.info(f"{file.name}: already ingested (skipped).")
+                else:
+                    st.success(
+                        f"{file.name}: {result['chunks_created']} chunks added "
+                        f"in {result['total_time_s']:.1f}s."
+                    )
+            else:
+                st.error(f"{file.name}: ingest failed — {resp.text}")
         st.rerun()
 
     st.divider()
@@ -127,8 +129,10 @@ if prompt := st.chat_input("Ask a question about your documents…"):
                 json={"message": prompt},
                 timeout=120,
             )
-            resp.raise_for_status()
+        if resp.ok:
             response = resp.json()["response"]
-        st.markdown(response)
-
-    st.session_state.messages.append({"role": "assistant", "content": response})
+            st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+        else:
+            detail = resp.json().get("detail", resp.text) if resp.headers.get("content-type", "").startswith("application/json") else resp.text
+            st.error(f"Error ({resp.status_code}): {detail}")

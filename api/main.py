@@ -1,8 +1,11 @@
+import logging
 import tempfile
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from langchain_core.messages import AIMessage, HumanMessage
+
+logger = logging.getLogger(__name__)
 
 from api.dependencies import get_embedder, get_runner, get_sessions, get_store
 from api.models import (
@@ -61,7 +64,11 @@ def chat(
     session = sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    response = runner.run_turn(session, body.message)
+    try:
+        response = runner.run_turn(session, body.message)
+    except Exception as exc:
+        logger.exception("run_turn failed for session %s", session_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ChatResponse(response=response, session_id=session_id)
 
 
@@ -102,7 +109,7 @@ def ingest_document(
         tmp_path = Path(tmp.name)
 
     try:
-        result = ingest_file(path=tmp_path, store=store, embedder=embedder)
+        result = ingest_file(path=tmp_path, store=store, embedder=embedder, filename=file.filename)
     finally:
         tmp_path.unlink(missing_ok=True)
 

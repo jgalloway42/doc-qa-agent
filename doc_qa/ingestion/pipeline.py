@@ -29,6 +29,7 @@ def ingest_file(
     embedder: EmbeddingProvider,
     force: bool = False,
     hash_store_path: Path = HASH_STORE_PATH,
+    filename: str | None = None,
 ) -> IngestionResult:
     """
     Full ingestion pipeline for a single file.
@@ -40,11 +41,12 @@ def ingest_file(
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
 
+    effective_name = filename or path.name
     t_start = time.monotonic()
 
     if not force and is_duplicate(path, hash_store_path):
         run_id = log_ingestion_run(
-            filename=path.name,
+            filename=effective_name,
             chunks_created=0,
             embedding_time_s=0.0,
             total_time_s=0.0,
@@ -55,7 +57,7 @@ def ingest_file(
             chunk_overlap=settings.chunk_overlap,
         )
         return IngestionResult(
-            filename=path.name,
+            filename=effective_name,
             skipped=True,
             chunks_created=0,
             embedding_time_s=0.0,
@@ -67,7 +69,7 @@ def ingest_file(
 
     chunks = chunk_pages(
         pages,
-        filename=path.name,
+        filename=effective_name,
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
         min_chunk_chars=settings.min_chunk_chars,
@@ -77,9 +79,9 @@ def ingest_file(
     try:
         embeddings = embedder.embed_documents([c.text for c in chunks]) if chunks else []
     except Exception as exc:
-        logger.exception("Embedding failed for %s", path.name)
+        logger.exception("Embedding failed for %s", effective_name)
         log_ingestion_run(
-            filename=path.name,
+            filename=effective_name,
             chunks_created=0,
             embedding_time_s=0.0,
             total_time_s=time.monotonic() - t_start,
@@ -95,11 +97,11 @@ def ingest_file(
     if chunks:
         store.add_chunks(chunks, embeddings)
 
-    file_hash = register_file(path, hash_store_path)
+    file_hash = register_file(path, hash_store_path, filename=effective_name)
     total_time_s = time.monotonic() - t_start
 
     run_id = log_ingestion_run(
-        filename=path.name,
+        filename=effective_name,
         chunks_created=len(chunks),
         embedding_time_s=embedding_time_s,
         total_time_s=total_time_s,
@@ -111,7 +113,7 @@ def ingest_file(
     )
 
     return IngestionResult(
-        filename=path.name,
+        filename=effective_name,
         skipped=False,
         chunks_created=len(chunks),
         embedding_time_s=embedding_time_s,
