@@ -17,15 +17,16 @@ An agentic document Q&A system for banking document corpora.
 - [Data Representation and Processing](#data-representation-and-processing)
 - [Solution](#solution)
 - [Results](#results)
-- [Quick Start](#quick-start)
-- [API Reference](#api-reference)
-- [Configuration](#configuration)
-- [Running with Docker](#running-with-docker)
-- [Development](#development)
-- [Observability](#observability)
-- [Known Limitations](#known-limitations)
-- [Production Migration](#production-migration)
-- [License](#license)
+- [Appendix](#appendix)
+  - [Quick Start](#quick-start)
+  - [API Reference](#api-reference)
+  - [Configuration](#configuration)
+  - [Running with Docker](#running-with-docker)
+  - [Development](#development)
+  - [Observability](#observability)
+  - [Known Limitations](#known-limitations)
+  - [Production Migration](#production-migration)
+  - [License](#license)
 
 ---
 
@@ -388,9 +389,11 @@ All Q&A chains below were captured from live agent runs against the ingested cor
 
 ---
 
-## Quick Start
+## Appendix
 
-### Prerequisites
+#### Quick Start
+
+#### Prerequisites
 
 - Python 3.11+
 - An LLM API key: `ANTHROPIC_API_KEY` (default) or `OPENAI_API_KEY`
@@ -406,7 +409,7 @@ sudo apt-get install tesseract-ocr poppler-utils
 
 OCR is optional — the PDF parser falls back to `pypdf` text extraction if Tesseract is not installed. Digitally-created PDFs do not require OCR.
 
-### Install
+#### Install
 
 ```bash
 git clone https://github.com/jgalloway42/doc-qa-agent.git
@@ -418,7 +421,7 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 make install
 ```
 
-### Configure
+#### Configure
 
 ```bash
 cp .env.example .env
@@ -436,7 +439,7 @@ EMBEDDING_PROVIDER=sentence_transformers
 
 See [`.env.example`](.env.example) for all options with full documentation.
 
-### Ingest the sample corpus
+#### Ingest the sample corpus
 
 ```bash
 make ingest
@@ -444,7 +447,7 @@ make ingest
 
 This ingests all nine documents in `docs/`. Duplicate files are skipped automatically (SHA-256 hash check).
 
-### Start the services
+#### Start the services
 
 ```bash
 # Terminal 1 — FastAPI backend
@@ -465,7 +468,7 @@ make mlflow
 
 ---
 
-## API Reference
+#### API Reference
 
 | Method | Path | Description |
 |---|---|---|
@@ -481,7 +484,7 @@ Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ---
 
-## Configuration
+#### Configuration
 
 All settings are environment variables loaded from `.env`. Full documentation is in [`.env.example`](.env.example).
 
@@ -503,7 +506,7 @@ All settings are environment variables loaded from `.env`. Full documentation is
 
 ---
 
-## Running with Docker
+#### Running with Docker
 
 ```bash
 cp .env.example .env
@@ -522,9 +525,9 @@ Data is persisted in `./chroma_db/` and `./mlflow_data/` via volume mounts. To r
 
 ---
 
-## Development
+#### Development
 
-### Make targets
+#### Make targets
 
 ```bash
 make install      # install package + dev dependencies
@@ -540,7 +543,7 @@ make mlflow       # start MLflow UI on :5000
 make clean        # remove chroma_db/, mlruns.db, caches
 ```
 
-### Running tests
+#### Running tests
 
 ```bash
 make test
@@ -548,7 +551,7 @@ make test
 
 Tests run against a real in-memory ChromaDB instance — not a mock. LLM calls are mocked with deterministic `AIMessage` responses. The 80% coverage gate is enforced; `ui/`, `cli/`, and `api/` are excluded from measurement. Current coverage: **90%** across 118 tests.
 
-### Project structure
+#### Project structure
 
 ```
 doc-qa-agent/
@@ -583,7 +586,7 @@ doc-qa-agent/
 └── pyproject.toml
 ```
 
-### Module boundaries
+#### Module boundaries
 
 | Layer | Module | Must NOT import |
 |---|---|---|
@@ -596,11 +599,11 @@ doc-qa-agent/
 
 ---
 
-## Observability
+#### Observability
 
 MLflow tracks two categories of runs under the `doc-qa-agent` experiment (start with `make mlflow`).
 
-### Ingestion runs
+#### Ingestion runs
 
 Each file ingestion creates one MLflow run named `ingest:<filename>`:
 
@@ -613,7 +616,7 @@ Each file ingestion creates one MLflow run named `ingest:<filename>`:
 | `skipped` | Param | `False` |
 | `embedding_provider` | Param | `sentence_transformers` |
 
-### Agent session runs
+#### Agent session runs
 
 Each conversation session creates one MLflow parent run named `session:<id[:8]>`. Per-turn metrics are logged with `step=turn_index`:
 
@@ -628,7 +631,7 @@ Each conversation session creates one MLflow parent run named `session:<id[:8]>`
 
 ---
 
-## Known Limitations
+#### Known Limitations
 
 **Grounding check is heuristic-based.** The post-response check verifies that a real document filename appears in the response — it does not verify that cited content is accurate or that page numbers are correct. A semantic grounding verifier (LLM-as-judge) is the correct v2 solution.
 
@@ -644,9 +647,9 @@ Each conversation session creates one MLflow parent run named `session:<id[:8]>`
 
 ---
 
-## Production Migration
+#### Production Migration
 
-### Migrating the vector store (e.g., to Snowflake Cortex)
+#### Migrating the vector store (e.g., to Snowflake Cortex)
 
 The `VectorStore` abstract base class (`doc_qa/store/base.py`) is the migration seam. A new backend requires one new file implementing the ABC — no changes to the agent, ingestion pipeline, tools, or tests.
 
@@ -665,7 +668,7 @@ class SnowflakeCortexVectorStore(VectorStore):
 
 Then swap in `api/dependencies.py`: `_store = SnowflakeCortexVectorStore(...)`.
 
-### Migrating MLflow to AWS S3
+#### Migrating MLflow to AWS S3
 
 Zero code changes — update one variable:
 
@@ -673,7 +676,7 @@ Zero code changes — update one variable:
 MLFLOW_TRACKING_URI=s3://your-bucket/mlruns.db
 ```
 
-### Recommended production additions
+#### Recommended production additions
 
 | Capability | Approach |
 |---|---|
@@ -686,7 +689,7 @@ MLFLOW_TRACKING_URI=s3://your-bucket/mlruns.db
 
 ---
 
-## License
+#### License
 
 MIT — see [LICENSE](LICENSE) for details.
 
