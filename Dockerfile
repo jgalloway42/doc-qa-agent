@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+COPY api/ api/
 COPY doc_qa/ doc_qa/
 COPY cli/ cli/
 COPY ui/ ui/

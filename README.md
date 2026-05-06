@@ -32,18 +32,14 @@ An agentic document Q&A system for banking document corpora.
 
 ## Abstract
 
-Banking document Q&A is harder than general-purpose RAG for three reasons: answers routinely span multiple documents (e.g., a rate from one file, a qualification rule from another), many questions require financial arithmetic, and hallucinated citations are actively harmful in a lending context.
-
-This project addresses all three. The system combines a **multi-format ingestion pipeline** with a **LangGraph ReAct agent** that reasons across documents using five specialized tools before producing a final answer. Every response is enforced to be grounded in retrieved document text through a two-layer check: mandatory system-prompt rules and a post-response programmatic filename verification. When the agent cannot find an answer, it says so explicitly and lists what documents are available.
+This project implements an agentic document question-answering system for banking document corpora. The system ingests documents in six formats (PDF, DOCX, Markdown, CSV, TXT, JSON) into a ChromaDB vector store using sentence-transformer embeddings, then exposes a conversational API backed by a LangGraph ReAct agent. The agent selects from five tools — semantic search, document listing, summarization, classification, and financial calculation — to retrieve evidence and reason across multiple documents before producing a response. Grounding is enforced through two mechanisms: mandatory system-prompt rules requiring the agent to prefix unverifiable responses with `UNGROUNDED:`, and a post-response check that verifies at least one known document filename appears in every factual answer. MLflow logs per-ingestion and per-turn metrics including latency and grounding status for observability. The implementation is scoped to run locally for evaluation; the vector store, embedding provider, session store, and MLflow backend are each replaceable via environment variable or a single-file interface implementation, with specific migration steps documented in the Appendix.
 
 **Key design decisions:**
 
-- **Grounded by default** — ungrounded responses are replaced with a structured warning, not silently returned.
-- **Modular by design** — the vector store, embedding provider, and LLM are each swappable via a one-line environment variable change.
-- **Proper separation of concerns** — FastAPI owns all agent and retrieval logic; Streamlit is a thin HTTP client. The frontend can be replaced without touching the backend.
-- **Observable** — MLflow tracks every ingestion run and every agent turn, including per-turn grounding status, latency, and tool call sequences.
-
-**Scope:** The current implementation is designed to run locally for evaluation and development. The architecture is deliberately structured for a clear path to production — the vector store, session store, and MLflow backend are all behind abstract interfaces or single environment variables. See the [Production Migration](#production-migration) section in the Appendix for the specific migration steps.
+- **Grounding enforcement** — responses that fail both the prompt-level and programmatic grounding checks are replaced with a structured warning listing available documents.
+- **Modular providers** — the vector store, embedding provider, and LLM are each swappable via environment variable; abstract base classes define the interface for new implementations.
+- **Service separation** — FastAPI owns all agent and retrieval logic; Streamlit is a thin HTTP client with no business logic.
+- **Observability** — MLflow tracks every ingestion run and every agent turn, including grounding status, latency, and tool call sequences.
 
 ---
 
@@ -510,20 +506,30 @@ All settings are environment variables loaded from `.env`. Full documentation is
 
 #### Running with Docker
 
-```bash
-cp .env.example .env
-# Edit .env with your API key
+All three services (API, UI, MLflow) can be started and stopped with a single command. Docker Engine must be installed and running.
 
-docker-compose up
+```bash
+cp .env.example .env   # fill in ANTHROPIC_API_KEY
+
+make docker-up         # build image and start all services
+make docker-down       # stop and remove containers
 ```
 
 | Service | URL |
 |---|---|
 | Streamlit UI | http://localhost:8501 |
-| FastAPI backend | http://localhost:8000 |
+| FastAPI backend | http://localhost:8000/docs |
 | MLflow UI | http://localhost:5000 |
 
-Data is persisted in `./chroma_db/` and `./mlflow_data/` via volume mounts. To rebuild after code changes: `docker-compose up --build`.
+**First run notes:** The initial build takes several minutes — PyTorch and the sentence-transformer model are large dependencies. The vector store starts empty; ingest the bundled documents once the stack is up:
+
+```bash
+docker compose exec api python -m cli.ingest_cli ingest docs/
+```
+
+Documents can also be uploaded one at a time via the sidebar in the Streamlit UI.
+
+Data persists across restarts via volume mounts: `./chroma_db/` (vector index), `./mlflow_data/` (MLflow database), and `.ingested_hashes.json` (dedup state).
 
 ---
 

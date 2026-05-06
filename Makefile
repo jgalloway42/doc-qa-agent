@@ -1,4 +1,4 @@
-.PHONY: install lint format type-check test test-cov ingest api ui mlflow clean docker-build docker-up
+.PHONY: install lint format type-check test test-cov ingest api ui mlflow clean docker-build docker-up docker-down
 
 install:
 	pip install -e ".[dev]"
@@ -38,4 +38,8 @@ docker-build:
 	docker build -t doc-qa-agent .
 
 docker-up:
-	docker-compose up
+	@touch .ingested_hashes.json
+	docker compose up
+
+docker-down:
+	docker compose down
