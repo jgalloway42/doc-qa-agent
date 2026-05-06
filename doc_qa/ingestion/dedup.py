@@ -46,7 +46,9 @@ def is_duplicate(path: Path, store_path: Path = HASH_STORE_PATH) -> bool:
     return file_hash in load_hash_store(store_path).values()
 
 
-def register_file(path: Path, store_path: Path = HASH_STORE_PATH, filename: str | None = None) -> str:
+def register_file(
+    path: Path, store_path: Path = HASH_STORE_PATH, filename: str | None = None
+) -> str:
     """Add path to hash store and persist. Return the hash."""
     file_hash = compute_file_hash(path)
     store = load_hash_store(store_path)

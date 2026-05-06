@@ -134,5 +134,9 @@ if prompt := st.chat_input("Ask a question about your documents…"):
             st.markdown(response)
             st.session_state.messages.append({"role": "assistant", "content": response})
         else:
-            detail = resp.json().get("detail", resp.text) if resp.headers.get("content-type", "").startswith("application/json") else resp.text
+            detail = (
+                resp.json().get("detail", resp.text)
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else resp.text
+            )
             st.error(f"Error ({resp.status_code}): {detail}")
