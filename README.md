@@ -43,6 +43,8 @@ This project addresses all three. The system combines a **multi-format ingestion
 - **Proper separation of concerns** — FastAPI owns all agent and retrieval logic; Streamlit is a thin HTTP client. The frontend can be replaced without touching the backend.
 - **Observable** — MLflow tracks every ingestion run and every agent turn, including per-turn grounding status, latency, and tool call sequences.
 
+**Scope:** The current implementation is designed to run locally for evaluation and development. The architecture is deliberately structured for a clear path to production — the vector store, session store, and MLflow backend are all behind abstract interfaces or single environment variables. See the [Production Migration](#production-migration) section in the Appendix for the specific migration steps.
+
 ---
 
 ## Dataset

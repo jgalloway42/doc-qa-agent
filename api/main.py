@@ -5,8 +5,6 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from langchain_core.messages import AIMessage, HumanMessage
 
-logger = logging.getLogger(__name__)
-
 from api.dependencies import get_embedder, get_runner, get_sessions, get_store
 from api.models import (
     ChatRequest,
@@ -23,6 +21,8 @@ from doc_qa.agent.runner import AgentRunner, AgentSession
 from doc_qa.embeddings import EmbeddingProvider
 from doc_qa.ingestion.pipeline import ingest_file
 from doc_qa.store.chroma import ChromaVectorStore
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="doc-qa-agent API", version="1.0.0")
 
