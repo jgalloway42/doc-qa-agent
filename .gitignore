@@ -227,3 +227,4 @@ mlflow_data/
 test_chroma_db/
 .ingested_hashes.json
 htmlcov/
+local_docs/
