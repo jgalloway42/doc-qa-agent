@@ -13,18 +13,23 @@ from doc_qa.store.base import VectorStore
 
 UNGROUNDED_PREFIX = "UNGROUNDED:"
 
+_CONTENT_TOOLS = {"search_documents", "summarize_document", "classify_document", "list_documents"}
+
 _SYSTEM_PROMPT = """\
 You are a precise document analysis assistant for a banking institution.
 You have access to a corpus of loan and banking documents.
 Always cite your sources (document name and page number) when answering.
 Use the calculate tool for any numerical computations.
 Use classify_document when asked to identify document types.
+Use summarize_document when asked to summarize a specific document by name.
+Use search_documents to find passages relevant to a question.
 If a search returns no results, try a different, broader query before concluding
 the information is not available.
 Reason step by step before producing a final answer.
 
 GROUNDING RULES — these are mandatory, not suggestions:
-1. You MUST only answer from information retrieved via the search_documents tool.
+1. You MUST only answer from information retrieved via the search_documents,
+   summarize_document, classify_document, or list_documents tools.
 2. You MUST NOT answer from general knowledge or training data.
 3. If after retrying your search you still have no retrieved evidence, you MUST
    respond with exactly this format:
@@ -102,7 +107,7 @@ class AgentRunner:
         # Grounding check — skip filename requirement when only calculate was called,
         # since those responses derive from prior retrieved context, not a new search.
         calculate_only = bool(tool_call_names) and all(t == "calculate" for t in tool_call_names)
-        grounded = calculate_only or self._check_grounded(response_text)
+        grounded = calculate_only or self._check_grounded(response_text, tool_call_names)
         if not grounded:
             final_response = self._format_grounding_failure()
             log_grounded = False
@@ -137,15 +142,20 @@ class AgentRunner:
 
         return final_response
 
-    def _check_grounded(self, response: str) -> bool:
+    def _check_grounded(self, response: str, tool_call_names: list[str] | None = None) -> bool:
         """
-        Return True if the response cites a known filename OR starts with UNGROUNDED_PREFIX.
-        Return False if non-empty but has no real filenames and no prefix.
+        Return True if:
+        - response starts with UNGROUNDED_PREFIX, or
+        - a content-retrieval tool was called (search_documents, summarize_document, etc.), or
+        - response text contains a known filename.
+        Return False if non-empty but has no evidence of grounding.
         """
         if response.startswith(UNGROUNDED_PREFIX):
             return True
         if len(response.strip()) == 0:
             return False
+        if tool_call_names and any(t in _CONTENT_TOOLS for t in tool_call_names):
+            return True
         known_filenames = set(self._store.list_documents())
         return any(fname in response for fname in known_filenames)
 
