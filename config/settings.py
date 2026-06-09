@@ -38,9 +38,10 @@ class Settings(BaseSettings):
     min_chunk_chars: int = 100
     pdf_ocr_threshold: int = 50
 
-    # MLflow — SQLite backend required for MLflow 3.x GenAI UI (traces, overview)
-    mlflow_tracking_uri: str = "sqlite:///mlruns.db"
-    mlflow_experiment_name: str = "doc-qa-agent"
+    # LangSmith observability (https://smith.langchain.com)
+    langsmith_api_key: str = ""
+    langsmith_project: str = "doc-qa-agent"
+    langchain_tracing_enabled: bool = True
 
     # Retrieval
     default_top_k: int = 5

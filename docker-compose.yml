@@ -6,12 +6,11 @@ services:
       - "8000:8000"
     volumes:
       - ./chroma_db:/app/chroma_db
-      - ./mlflow_data:/app/mlflow_data
       - ./.ingested_hashes.json:/app/.ingested_hashes.json
     env_file:
       - .env
     environment:
-      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlruns.db
+      - LANGCHAIN_TRACING_V2=true
 
   app:
     build: .
@@ -23,11 +22,3 @@ services:
       - API_BASE_URL=http://api:8000
     depends_on:
       - api
-
-  mlflow:
-    build: .
-    command: mlflow ui --backend-store-uri sqlite:////app/mlflow_data/mlruns.db --host 0.0.0.0 --port 5000
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./mlflow_data:/app/mlflow_data

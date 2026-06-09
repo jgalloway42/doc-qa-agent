@@ -4,7 +4,6 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-import mlflow
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from doc_qa.agent.graph import build_graph, make_llm
@@ -43,7 +42,6 @@ GROUNDING RULES — these are mandatory, not suggestions:
 class AgentSession:
     session_id: str
     history: list[BaseMessage] = field(default_factory=list)
-    mlflow_run_id: str | None = None
 
 
 class AgentRunner:
@@ -54,21 +52,18 @@ class AgentRunner:
         self._graph = build_graph(store, embedder, self._llm)
 
     def new_session(self) -> AgentSession:
-        """Create a new session with a UUID session_id. Start an MLflow parent run."""
-        from config.settings import settings
-        from doc_qa.observability import setup_mlflow
+        """Create a new session. Initialises LangSmith tracing (no-op if not configured)."""
+        from doc_qa.observability import setup_langsmith
 
-        setup_mlflow()
-        session_id = str(uuid.uuid4())
-        mlflow.set_experiment(settings.mlflow_experiment_name)
-        with mlflow.start_run(run_name=f"session:{session_id[:8]}") as run:
-            mlflow_run_id = run.info.run_id
-        return AgentSession(session_id=session_id, mlflow_run_id=mlflow_run_id)
+        setup_langsmith()
+        return AgentSession(session_id=str(uuid.uuid4()))
 
     def run_turn(self, session: AgentSession, user_message: str) -> str:
-        """Invoke the graph, apply grounding check, log to MLflow, return response."""
-        from doc_qa.observability import log_agent_turn
+        """Invoke the graph, apply grounding check, return response.
 
+        LangSmith automatically traces the full graph execution — every node,
+        tool call, and LLM response — when LANGCHAIN_TRACING_V2 is enabled.
+        """
         t_start = time.monotonic()
         system_msg = SystemMessage(content=_SYSTEM_PROMPT)
         human_msg = HumanMessage(content=user_message)
@@ -80,7 +75,7 @@ class AgentRunner:
             "last_tool_empty": False,
         }
         result_state = self._graph.invoke(initial_state)
-        latency_s = time.monotonic() - t_start
+        _ = time.monotonic() - t_start  # latency available if needed for future use
 
         # Extract final AIMessage
         final_ai_msg: AIMessage | None = None
@@ -93,16 +88,12 @@ class AgentRunner:
         if not isinstance(response_text, str):
             response_text = str(response_text)
 
-        # Collect tool call names and results from the result state
+        # Collect tool call names for grounding check
         tool_call_names: list[str] = []
-        tool_results: list[str] = []
         for msg in result_state["messages"]:
             if isinstance(msg, AIMessage) and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_call_names.append(tc["name"])
-            elif isinstance(msg, ToolMessage):
-                content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                tool_results.append(content)
 
         # Grounding check — skip filename requirement when only calculate was called,
         # since those responses derive from prior retrieved context, not a new search.
@@ -110,35 +101,18 @@ class AgentRunner:
         grounded = calculate_only or self._check_grounded(response_text, tool_call_names)
         if not grounded:
             final_response = self._format_grounding_failure()
-            log_grounded = False
         elif response_text.startswith(UNGROUNDED_PREFIX):
             stripped = response_text[len(UNGROUNDED_PREFIX) :].strip()
             doc_list = "\n".join(f"• {fn}" for fn in self._store.list_documents())
             final_response = (
                 f"⚠️ {stripped}\n\nDocuments available:\n{doc_list}" if doc_list else f"⚠️ {stripped}"
             )
-            log_grounded = False
         else:
             final_response = response_text
-            log_grounded = True
 
         # Append to session history
         session.history.append(human_msg)
         session.history.append(AIMessage(content=final_response))
-
-        # MLflow logging
-        turn_index = len(session.history) // 2 - 1
-        if session.mlflow_run_id:
-            log_agent_turn(
-                run_id=session.mlflow_run_id,
-                turn_index=turn_index,
-                user_message=user_message[:500],
-                response_preview=final_response[:500],
-                tool_calls=tool_call_names,
-                tool_results=tool_results,
-                latency_s=latency_s,
-                grounded=log_grounded,
-            )
 
         return final_response
 

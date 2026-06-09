@@ -1,4 +1,3 @@
-import mlflow
 from langchain_core.messages import AIMessage, HumanMessage
 
 from doc_qa.agent.runner import AgentRunner, AgentSession
@@ -24,7 +23,6 @@ def test_new_session_returns_session_with_id(chroma_store, fake_embedder, mock_l
     session = runner.new_session()
     assert isinstance(session, AgentSession)
     assert len(session.session_id) > 0
-    assert session.mlflow_run_id is not None
 
 
 # ---------------------------------------------------------------------------
@@ -68,26 +66,13 @@ def test_run_turn_appends_to_history(chroma_store, fake_embedder, mock_llm, mock
     assert isinstance(session.history[3], AIMessage)
 
 
-def test_run_turn_logs_mlflow(chroma_store, fake_embedder, mock_llm, mocker):
-    runner, mock_graph = _make_runner(chroma_store, fake_embedder, mock_llm, mocker)
-    session = runner.new_session()
-    _setup_graph_response(mock_graph, "Answer referencing loan_application.pdf.")
-
-    runner.run_turn(session, "What documents are available?")
-
-    # Session run should have nested runs logged
-    assert session.mlflow_run_id is not None
-    # Verify the parent run exists in MLflow
-    parent_run = mlflow.get_run(session.mlflow_run_id)
-    assert parent_run is not None
-
-
-def test_run_turn_logs_tool_results(chroma_store, fake_embedder, mock_llm, mocker):
+def test_run_turn_uses_tool_calls_for_grounding(chroma_store, fake_embedder, mock_llm, mocker):
     from langchain_core.messages import ToolMessage
 
     runner, mock_graph = _make_runner(chroma_store, fake_embedder, mock_llm, mocker)
     session = runner.new_session()
 
+    # Response has no filename but search_documents was called — should be grounded
     mock_graph.invoke.return_value = {
         "messages": [
             AIMessage(
@@ -99,20 +84,15 @@ def test_run_turn_logs_tool_results(chroma_store, fake_embedder, mock_llm, mocke
                 name="search_documents",
                 tool_call_id="c1",
             ),
-            AIMessage(content="The rate is 6.75% per mortgage_faq.md."),
+            AIMessage(content="The current mortgage rate is 6.75%."),
         ],
         "retry_count": 0,
         "last_tool_name": "search_documents",
         "last_tool_empty": False,
     }
 
-    mock_log = mocker.patch("doc_qa.observability.log_agent_turn")
-    runner.run_turn(session, "What is the rate?")
-
-    kwargs = mock_log.call_args.kwargs
-    assert kwargs["tool_calls"] == ["search_documents"]
-    assert len(kwargs["tool_results"]) == 1
-    assert "6.75%" in kwargs["tool_results"][0]
+    result = runner.run_turn(session, "What is the rate?")
+    assert not result.startswith("⚠️")
 
 
 # ---------------------------------------------------------------------------

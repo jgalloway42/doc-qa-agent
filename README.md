@@ -32,14 +32,14 @@ An agentic document Q&A system for banking document corpora.
 
 ## Abstract
 
-This project implements an agentic document question-answering system for banking document corpora. The system ingests documents in six formats (PDF, DOCX, Markdown, CSV, TXT, JSON) into a ChromaDB vector store using sentence-transformer embeddings, then exposes a conversational API backed by a LangGraph ReAct agent. The agent selects from five tools — semantic search, document listing, summarization, classification, and financial calculation — to retrieve evidence and reason across multiple documents before producing a response. Grounding is enforced through two mechanisms: mandatory system-prompt rules requiring the agent to prefix unverifiable responses with `UNGROUNDED:`, and a post-response check that verifies at least one known document filename appears in every factual answer. MLflow logs per-ingestion and per-turn metrics including latency and grounding status for observability. The implementation is scoped to run locally for evaluation; the vector store, embedding provider, session store, and MLflow backend are each replaceable via environment variable or a single-file interface implementation, with specific migration steps documented in the Appendix.
+This project implements an agentic document question-answering system for banking document corpora. The system ingests documents in six formats (PDF, DOCX, Markdown, CSV, TXT, JSON) into a ChromaDB vector store using sentence-transformer embeddings, then exposes a conversational API backed by a LangGraph ReAct agent. The agent selects from five tools — semantic search, document listing, summarization, classification, and financial calculation — to retrieve evidence and reason across multiple documents before producing a response. Grounding is enforced through two mechanisms: mandatory system-prompt rules requiring the agent to prefix unverifiable responses with `UNGROUNDED:`, and a post-response check that verifies either a known document filename or a content-retrieval tool call is present in every factual answer. LangSmith traces every agent turn, tool call, and LLM response automatically via LangGraph's native integration. The implementation is scoped to run locally for evaluation; the vector store, embedding provider, and session store are each replaceable via environment variable or a single-file interface implementation, with specific migration steps documented in the Appendix.
 
 **Key design decisions:**
 
 - **Grounding enforcement** — responses that fail both the prompt-level and programmatic grounding checks are replaced with a structured warning listing available documents.
 - **Modular providers** — the vector store, embedding provider, and LLM are each swappable via environment variable; abstract base classes define the interface for new implementations.
 - **Service separation** — FastAPI owns all agent and retrieval logic; Streamlit is a thin HTTP client with no business logic.
-- **Observability** — MLflow tracks every ingestion run and every agent turn, including grounding status, latency, and tool call sequences.
+- **Observability** — LangSmith auto-traces every agent turn, tool call, and LLM response via LangGraph's native integration; no manual instrumentation required.
 
 ---
 
@@ -214,7 +214,7 @@ Browser → Streamlit (ui/app.py)          :8501
               ├── ChromaVectorStore (singleton)
               └── EmbeddingProvider (singleton)
 
-MLflow (sqlite:///mlruns.db)             :5000
+LangSmith (smith.langchain.com)          cloud
 ChromaDB (./chroma_db/)
 ```
 
@@ -468,15 +468,13 @@ make api
 # Terminal 2 — Streamlit frontend
 make ui
 
-# Terminal 3 — MLflow UI (optional)
-make mlflow
 ```
 
 | Service | URL |
 |---|---|
 | Streamlit UI | http://localhost:8501 |
 | FastAPI + Swagger | http://localhost:8000/docs |
-| MLflow | http://localhost:5000 |
+| LangSmith traces | https://smith.langchain.com |
 
 ---
 
@@ -486,7 +484,7 @@ make mlflow
 |---|---|---|
 | `GET` | `/health` | Liveness check → `{"status": "ok"}` |
 | `GET` | `/status` | Corpus stats + provider settings |
-| `POST` | `/sessions` | Create a new chat session → `{session_id, mlflow_run_id}` |
+| `POST` | `/sessions` | Create a new chat session → `{session_id}` |
 | `POST` | `/sessions/{id}/chat` | Send a message → `{response, session_id}` |
 | `GET` | `/sessions/{id}` | Retrieve session message history |
 | `GET` | `/documents` | List all ingested documents with chunk counts |
@@ -510,7 +508,7 @@ All settings are environment variables loaded from `.env`. Full documentation is
 | `CHUNK_SIZE` | `512` | Characters per chunk |
 | `CHUNK_OVERLAP` | `64` | Overlap between consecutive chunks |
 | `PDF_OCR_THRESHOLD` | `50` | Mean chars/page below which OCR is triggered; `0` disables OCR |
-| `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` | MLflow backend — SQLite required for MLflow 3.x GenAI UI |
+| `LANGCHAIN_API_KEY` | — | LangSmith API key — get one free at smith.langchain.com; leave blank to disable tracing |
 | `DEFAULT_TOP_K` | `5` | Chunks returned per search |
 | `MAX_TOOL_RETRIES` | `2` | Max automatic search retries per agent turn |
 
@@ -520,7 +518,7 @@ All settings are environment variables loaded from `.env`. Full documentation is
 
 #### Running with Docker
 
-All three services (API, UI, MLflow) can be started and stopped with a single command. Docker Engine must be installed and running.
+Both services (API and UI) can be started and stopped with a single command. Docker Engine must be installed and running.
 
 ```bash
 cp .env.example .env   # fill in ANTHROPIC_API_KEY
@@ -533,7 +531,7 @@ make docker-down       # stop and remove containers
 |---|---|
 | Streamlit UI | http://localhost:8501 |
 | FastAPI backend | http://localhost:8000/docs |
-| MLflow UI | http://localhost:5000 |
+| LangSmith traces | https://smith.langchain.com |
 
 **First run notes:** The initial build takes several minutes — PyTorch and the sentence-transformer model are large dependencies. The vector store starts empty; ingest the bundled documents once the stack is up:
 
@@ -543,7 +541,7 @@ docker compose exec api python -m cli.ingest_cli ingest docs/
 
 Documents can also be uploaded one at a time via the sidebar in the Streamlit UI.
 
-Data persists across restarts via volume mounts: `./chroma_db/` (vector index), `./mlflow_data/` (MLflow database), and `.ingested_hashes.json` (dedup state).
+Data persists across restarts via volume mounts: `./chroma_db/` (vector index) and `.ingested_hashes.json` (dedup state).
 
 ---
 
@@ -561,8 +559,7 @@ make test-cov     # pytest + HTML coverage report (htmlcov/)
 make ingest       # ingest docs/ directory
 make api          # start FastAPI on :8000 (with --reload)
 make ui           # start Streamlit on :8501
-make mlflow       # start MLflow UI on :5000
-make clean        # remove chroma_db/, mlruns.db, caches
+make clean        # remove chroma_db/, caches
 ```
 
 #### Running tests
@@ -587,7 +584,7 @@ doc-qa-agent/
 ├── config/settings.py          # Pydantic-settings BaseSettings
 ├── doc_qa/
 │   ├── embeddings.py           # EmbeddingProvider ABC + implementations
-│   ├── observability.py        # MLflow helpers
+│   ├── observability.py        # LangSmith setup + ingestion trace helper
 │   ├── ingestion/
 │   │   ├── parsers.py          # File-type parsers (PDF, DOCX, MD, TXT, CSV, JSON)
 │   │   ├── chunker.py          # Sliding window chunker
@@ -602,7 +599,7 @@ doc-qa-agent/
 │       └── runner.py           # Session memory + grounding check
 ├── docs/                       # Sample banking document corpus (9 files, 6 types)
 ├── ui/app.py                   # Streamlit frontend (thin HTTP client)
-├── tests/                      # pytest suite (90% coverage, 118 tests)
+├── tests/                      # pytest suite (90% coverage, 117 tests)
 ├── Dockerfile
 ├── docker-compose.yml
 └── pyproject.toml
@@ -623,33 +620,34 @@ doc-qa-agent/
 
 #### Observability
 
-MLflow tracks two categories of runs under the `doc-qa-agent` experiment (start with `make mlflow`).
+[LangSmith](https://smith.langchain.com) traces every agent turn automatically — no manual instrumentation required. Set `LANGCHAIN_API_KEY` in `.env` to enable.
 
-#### Ingestion runs
+#### What LangSmith captures automatically
 
-Each file ingestion creates one MLflow run named `ingest:<filename>`:
+Every `graph.invoke()` call (one per agent turn) produces a hierarchical trace in LangSmith:
 
-| Signal | Type | Example |
-|---|---|---|
-| `chunks_created` | Metric | `25` |
-| `embedding_time_s` | Metric | `1.34` |
-| `total_time_s` | Metric | `1.61` |
-| `filename` | Param | `underwriting_guidelines.docx` |
-| `skipped` | Param | `False` |
-| `embedding_provider` | Param | `sentence_transformers` |
+| Signal | Captured by |
+|---|---|
+| Full message history at each graph node | LangGraph auto-trace |
+| Tool call name, input args, and output | LangGraph auto-trace |
+| Per-node latency | LangGraph auto-trace |
+| LLM prompt + completion at each step | LangChain auto-trace |
+| Token counts | LangChain auto-trace (provider-dependent) |
+| Error traces with full stack context | LangGraph auto-trace |
 
-#### Agent session runs
+#### Ingestion traces
 
-Each conversation session creates one MLflow parent run named `session:<id[:8]>`. Per-turn metrics are logged with `step=turn_index`:
+File ingestion is not a LangChain call, so it is traced explicitly via `@traceable` in `doc_qa/observability.py`. Each `ingest_file()` call creates one LangSmith trace named `ingest_document`:
 
-| Signal | Type | What it tells you |
-|---|---|---|
-| `latency_s` | Metric (per step) | Agent response time |
-| `grounded` | Metric (per step) | `1.0` = grounded, `0.0` = ungrounded |
-| `tool_calls` | Param (per step) | e.g., `search_documents,calculate` |
-| `tool_result_N` | Param (per step) | Content returned by the Nth tool call (truncated to 500 chars) |
-| `user_message` | Param (per step) | Truncated to 500 chars |
-| `response_preview` | Param (per step) | Truncated to 500 chars |
+| Field | Example |
+|---|---|
+| `filename` | `underwriting_guidelines.docx` |
+| `chunks_created` | `25` |
+| `embedding_time_s` | `1.34` |
+| `total_time_s` | `1.61` |
+| `skipped` | `False` |
+
+Tracing is disabled (no errors, no traces) when `LANGCHAIN_API_KEY` is blank — safe for local dev and CI.
 
 ---
 
@@ -690,13 +688,9 @@ class SnowflakeCortexVectorStore(VectorStore):
 
 Then swap in `api/dependencies.py`: `_store = SnowflakeCortexVectorStore(...)`.
 
-#### Migrating MLflow to AWS S3
+#### LangSmith in production
 
-Zero code changes — update one variable:
-
-```bash
-MLFLOW_TRACKING_URI=s3://your-bucket/mlruns.db
-```
+LangSmith is a cloud-hosted SaaS — no infrastructure to run. The same `LANGCHAIN_API_KEY` and `LANGCHAIN_PROJECT` env vars that work locally work in ECS/Fargate without any code change. Set them as ECS task environment variables or AWS Secrets Manager references in your task definition.
 
 #### Recommended production additions
 
@@ -721,7 +715,7 @@ All runtime dependencies are MIT, Apache 2.0, or BSD 3-Clause licensed. No GPL o
 |---|---|
 | langchain / langgraph | MIT |
 | chromadb | Apache 2.0 |
-| mlflow | Apache 2.0 |
+| langsmith | MIT |
 | fastapi / uvicorn | MIT / BSD 3-Clause |
 | streamlit | Apache 2.0 |
 | sentence-transformers | Apache 2.0 |

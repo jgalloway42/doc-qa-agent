@@ -3,7 +3,6 @@ from pydantic import BaseModel
 
 class SessionResponse(BaseModel):
     session_id: str
-    mlflow_run_id: str | None = None
 
 
 class ChatRequest(BaseModel):

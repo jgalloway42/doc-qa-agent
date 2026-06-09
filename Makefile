@@ -1,4 +1,4 @@
-.PHONY: install lint format type-check test test-cov ingest api ui mlflow clean docker-build docker-up docker-down
+.PHONY: install lint format type-check test test-cov ingest api ui clean docker-build docker-up docker-down
 
 install:
 	pip install -e ".[dev]"
@@ -28,11 +28,8 @@ api:
 ui:
 	streamlit run ui/app.py
 
-mlflow:
-	mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5000
-
 clean:
-	rm -rf chroma_db/ mlruns/ mlruns.db mlflow_data/ test_mlruns/ test_mlruns.db test_chroma_db/ .ingested_hashes.json __pycache__/ .pytest_cache/ htmlcov/ coverage.xml
+	rm -rf chroma_db/ test_chroma_db/ .ingested_hashes.json __pycache__/ .pytest_cache/ htmlcov/ coverage.xml
 
 docker-build:
 	docker build -t doc-qa-agent .

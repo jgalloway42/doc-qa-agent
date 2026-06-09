@@ -24,7 +24,6 @@ def _init_session() -> None:
         resp.raise_for_status()
         data = resp.json()
         st.session_state.session_id = data["session_id"]
-        st.session_state.mlflow_run_id = data.get("mlflow_run_id")
         st.session_state.messages = []  # display list: {"role": ..., "content": ...}
 
 
@@ -98,11 +97,10 @@ with st.sidebar:
 
     st.divider()
 
-    # --- MLflow ---
-    st.header("📊 MLflow")
-    st.markdown("[Open MLflow UI](http://localhost:5000)", unsafe_allow_html=True)
-    if st.session_state.get("mlflow_run_id"):
-        st.caption(f"Run ID: `{st.session_state.mlflow_run_id}`")
+    # --- LangSmith ---
+    st.header("📊 LangSmith")
+    st.markdown("[Open LangSmith](https://smith.langchain.com)", unsafe_allow_html=True)
+    st.caption("Agent traces appear automatically when LANGCHAIN_API_KEY is set.")
 
 
 # ---------------------------------------------------------------------------

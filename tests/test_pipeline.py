@@ -1,4 +1,3 @@
-import mlflow
 import pytest
 
 from doc_qa.ingestion.pipeline import IngestionResult, ingest_directory, ingest_file
@@ -80,28 +79,28 @@ def test_ingest_file_raises_for_missing_file(tmp_path, chroma_store, fake_embedd
 # ---------------------------------------------------------------------------
 
 
-def test_ingest_file_logs_mlflow_run(tmp_path, chroma_store, fake_embedder):
+def test_ingest_file_creates_langsmith_trace(tmp_path, chroma_store, fake_embedder, mocker):
+    mock_log = mocker.patch("doc_qa.ingestion.pipeline.log_ingestion_run")
     path = _make_txt(tmp_path)
-    result = ingest_file(
-        path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json"
-    )
+    ingest_file(path, chroma_store, fake_embedder, hash_store_path=tmp_path / "hashes.json")
 
-    assert result.mlflow_run_id
-    run = mlflow.get_run(result.mlflow_run_id)
-    assert run.data.params["filename"] == path.name
-    assert run.data.params["skipped"] == "False"
+    mock_log.assert_called_once()
+    kwargs = mock_log.call_args.kwargs
+    assert kwargs["filename"] == path.name
+    assert kwargs["skipped"] is False
 
 
-def test_ingest_file_skipped_logs_mlflow_run(tmp_path, chroma_store, fake_embedder):
+def test_ingest_file_skipped_creates_langsmith_trace(tmp_path, chroma_store, fake_embedder, mocker):
+    mock_log = mocker.patch("doc_qa.ingestion.pipeline.log_ingestion_run")
     path = _make_txt(tmp_path)
     hash_store = tmp_path / "hashes.json"
 
     ingest_file(path, chroma_store, fake_embedder, hash_store_path=hash_store)
-    second = ingest_file(path, chroma_store, fake_embedder, hash_store_path=hash_store)
+    ingest_file(path, chroma_store, fake_embedder, hash_store_path=hash_store)
 
-    assert second.mlflow_run_id
-    run = mlflow.get_run(second.mlflow_run_id)
-    assert run.data.params["skipped"] == "True"
+    assert mock_log.call_count == 2
+    second_kwargs = mock_log.call_args.kwargs
+    assert second_kwargs["skipped"] is True
 
 
 # ---------------------------------------------------------------------------

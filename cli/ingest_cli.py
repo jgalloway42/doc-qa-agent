@@ -30,9 +30,9 @@ def ingest(
 ) -> None:
     """Ingest a single file or all supported files in a directory."""
     from doc_qa.ingestion.pipeline import ingest_directory, ingest_file
-    from doc_qa.observability import setup_mlflow
+    from doc_qa.observability import setup_langsmith
 
-    setup_mlflow()
+    setup_langsmith()
     store = _make_store()
     embedder = _make_embedder()
 

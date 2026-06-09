@@ -51,7 +51,7 @@ def create_session(
 ):
     session = runner.new_session()
     sessions[session.session_id] = session
-    return SessionResponse(session_id=session.session_id, mlflow_run_id=session.mlflow_run_id)
+    return SessionResponse(session_id=session.session_id)
 
 
 @app.post("/sessions/{session_id}/chat", response_model=ChatResponse)

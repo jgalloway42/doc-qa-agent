@@ -20,7 +20,6 @@ class IngestionResult:
     chunks_created: int
     embedding_time_s: float
     total_time_s: float
-    mlflow_run_id: str
 
 
 def ingest_file(
@@ -45,7 +44,7 @@ def ingest_file(
     t_start = time.monotonic()
 
     if not force and is_duplicate(path, hash_store_path):
-        run_id = log_ingestion_run(
+        log_ingestion_run(
             filename=effective_name,
             chunks_created=0,
             embedding_time_s=0.0,
@@ -62,7 +61,6 @@ def ingest_file(
             chunks_created=0,
             embedding_time_s=0.0,
             total_time_s=time.monotonic() - t_start,
-            mlflow_run_id=run_id,
         )
 
     pages = parse_file(path)
@@ -100,7 +98,7 @@ def ingest_file(
     file_hash = register_file(path, hash_store_path, filename=effective_name)
     total_time_s = time.monotonic() - t_start
 
-    run_id = log_ingestion_run(
+    log_ingestion_run(
         filename=effective_name,
         chunks_created=len(chunks),
         embedding_time_s=embedding_time_s,
@@ -118,7 +116,6 @@ def ingest_file(
         chunks_created=len(chunks),
         embedding_time_s=embedding_time_s,
         total_time_s=total_time_s,
-        mlflow_run_id=run_id,
     )
 
 
