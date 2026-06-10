@@ -1,23 +1,9 @@
-import mlflow
 import numpy as np
 import pytest
 
 from doc_qa.embeddings import EmbeddingProvider
 from doc_qa.store.base import Chunk
 from doc_qa.store.chroma import ChromaVectorStore
-
-# ---------------------------------------------------------------------------
-# MLflow — redirect to a temp dir so tests never pollute ./mlruns
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _mlflow_tmp(tmp_path):
-    uri = f"sqlite:///{tmp_path}/test_mlruns.db"
-    mlflow.set_tracking_uri(uri)
-    yield
-    mlflow.set_tracking_uri("sqlite:///mlruns.db")
-
 
 # ---------------------------------------------------------------------------
 # Fake embedding provider — fixed-length random vectors (dim=384)
